@@ -81,9 +81,12 @@ if (${USE_OMP})
 endif()
 
 if (${USE_LAPACK})
-  set (KOTEKAN_PROCESS_LIB_SOURCES ${KOTEKAN_PROCESS_LIB_SOURCES} eigenVis.cpp)
   set (KOTEKAN_PROCESS_LIB_SOURCES ${KOTEKAN_PROCESS_LIB_SOURCES} EigenVisIter.cpp)
 endif ()
+
+if (${USE_LAPACK} AND ${USE_OMP})
+  set (KOTEKAN_PROCESS_LIB_SOURCES ${KOTEKAN_PROCESS_LIB_SOURCES} eigenVis.cpp)
+endif()
 
 add_library (kotekan_processes ${KOTEKAN_PROCESS_LIB_SOURCES})
 target_link_libraries( kotekan_processes ${EVENT_LIBRARIES} )
