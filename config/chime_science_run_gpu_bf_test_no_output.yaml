@@ -110,9 +110,9 @@ updatable_config:
   frb_gain:
     kotekan_update_endpoint: json
     frb_gain_dir: /root/andre/phase_test/gains/Latest_FRB
-  UT1_UTC_offset:
+  DUT1:
     kotekan_update_endpoint: json
-    UT1_UTC_val: 0.05904211328819444771
+    DUT1: 0.05904211328819444771
   tracking_gain:
     0:
       kotekan_update_endpoint: json
@@ -1063,7 +1063,7 @@ read_gain:
 #### Generate tracking beamformer phases ####
 tracking_phases_new:
   updatable_config:
-    UT1_UTC: /updatable_config/UT1_UTC_offset
+    DUT1: /updatable_config/DUT1
     tracking_pt: /updatable_config/tracking_pointing
   log_level: WARN
   num_local_beams: 1
@@ -1092,7 +1092,7 @@ tracking_phases_new:
 
 tracking_phases_old:
   updatable_config:
-    UT1_UTC: /updatable_config/UT1_UTC_offset
+    DUT1: /updatable_config/DUT1
     tracking_pt: /updatable_config/tracking_pointing
   log_level: WARN
   num_local_beams: 11

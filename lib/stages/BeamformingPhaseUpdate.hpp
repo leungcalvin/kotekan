@@ -51,8 +51,8 @@ public:
     /// Main thread/loop
     void main_thread() override;
 
-    /// Endpoint for providing new UT1-UTC offset
-    bool update_UT1_UTC_offset(nlohmann::json& json);
+    /// Endpoint for providing new DUT1 (UT1-UTC) offset
+    bool update_DUT1(nlohmann::json& json);
 
     /// Endpoint for providing new tracking target (RA, Dec, beam_id)
     bool tracking_update_callback(nlohmann::json& json, const uint8_t beamID);
@@ -98,7 +98,7 @@ protected:
     /// mutex lock prevent beam_coord to be read while it is being updated.
     std::mutex beam_lock;
 
-    /// Offset between UTC and UT1
+    /// DUT1 = UT1 - UTC
     double _DUT1;
 
     /**

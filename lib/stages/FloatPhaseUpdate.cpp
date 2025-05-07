@@ -47,7 +47,7 @@ void FloatPhaseUpdate::compute_phases(uint8_t* out_frame_int, const timespec& gp
     //}
     //LST = fmod(LST, 24);
     double UT = (hour) + (utc_time->tm_min / 60.)
-               + (utc_time->tm_sec + _DUT1 + gps_time.tv_nsec / 1.e9) / 3600.;                //TO DO:UT1_UTC should be a double value in struct _beam_coord containing UT1-UTC in seconds
+               + (utc_time->tm_sec + _DUT1 + gps_time.tv_nsec / 1.e9) / 3600.;                //TO DO: DUT1 could be made a double value in struct _beam_coord containing DUT1 = UT1-UTC in seconds
     double JD_UT1 = JD + UT / 24.;
 
 

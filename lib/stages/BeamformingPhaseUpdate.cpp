@@ -45,12 +45,12 @@ STAGE_CONSTRUCTOR(BeamformingPhaseUpdate) {
     feed_locations =
         config.get<std::vector<std::pair<double, double>>>(unique_name, "feed_positions");
 
-    // listen for UT1_UTC offset
-    std::string UT1_UTC =
-        config.get_default<std::string>(unique_name, "updatable_config/UT1_UTC", "");
-    if (UT1_UTC.length() > 0)
+    // listen for DUT1 (UT1 - UTC) offset
+    std::string DUT1 =
+        config.get_default<std::string>(unique_name, "updatable_config/DUT1", "");
+    if (DUT1.length() > 0)
         kotekan::configUpdater::instance().subscribe(
-            UT1_UTC, std::bind(&BeamformingPhaseUpdate::update_UT1_UTC_offset, this, std::placeholders::_1));
+            DUT1, std::bind(&BeamformingPhaseUpdate::update_DUT1, this, std::placeholders::_1));
 
     // Register function to listen for new beam, and update ra and dec
     using namespace std::placeholders;
@@ -94,12 +94,12 @@ bool BeamformingPhaseUpdate::tracking_update_callback(nlohmann::json& json, cons
     return true;
 }
 
-bool BeamformingPhaseUpdate::update_UT1_UTC_offset(nlohmann::json& json) {
+bool BeamformingPhaseUpdate::update_DUT1(nlohmann::json& json) {
     std::lock_guard<std::mutex> lock(beam_lock);
     try {
-        _DUT1 = json.at("UT1_UTC_val").get<double>();
+        _DUT1 = json.at("DUT1").get<double>();
     } catch (std::exception& e) {
-        WARN("[FRB] Fail to read UT1_UTC offset {:s}", e.what());
+        WARN("[FRB] Failed to read DUT1 {:s}", e.what());
         return false;
     }
 
