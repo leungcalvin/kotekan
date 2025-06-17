@@ -1599,7 +1599,7 @@ extra_tracking_beams:
       buf: beam_buffer_10_merged
       # outrigger-gating
       server_ip: 10.1.50.52
-      server_port: 10030
+      server_port: 11030
       log_level: error
       reconnect_time: 10
   beam_extract_11:
@@ -1632,11 +1632,19 @@ extra_tracking_beams:
     beam_send_11:
       kotekan_stage: bufferSend
       buf: beam_buffer_11_merged
+      # bass
+      server_ip: 10.1.50.10
+      server_port: 11030
+      log_level: error
+      reconnect_time: 20
+    beam_send_11:
+      kotekan_stage: bufferSend
+      buf: beam_buffer_11_merged
       # outrigger-gating
       server_ip: 10.1.50.52
-      server_port: 10035
+      server_port: 11035
       log_level: error
-      reconnect_time: 10
+      reconnect_time: 20
 
 #### N2 GPU Post processing ####
 valve:
