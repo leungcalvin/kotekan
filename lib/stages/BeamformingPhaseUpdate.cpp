@@ -41,18 +41,18 @@ STAGE_CONSTRUCTOR(BeamformingPhaseUpdate) {
 
     frequencies_in_frame.resize(_num_local_freq);
 
-    // Get feed locations
+    // Get feed locations.
     feed_locations =
         config.get<std::vector<std::pair<double, double>>>(unique_name, "feed_positions");
 
-    // listen for DUT1 (UT1 - UTC) offset
+    // Listen for DUT1 (UT1 - UTC) offset.
     std::string DUT1 =
         config.get_default<std::string>(unique_name, "updatable_config/DUT1", "");
     if (DUT1.length() > 0)
         kotekan::configUpdater::instance().subscribe(
             DUT1, std::bind(&BeamformingPhaseUpdate::update_DUT1, this, std::placeholders::_1));
 
-    // Register function to listen for new beam, and update ra and dec
+    // Register function to listen for new beam, and update ra and dec.
     using namespace std::placeholders;
     for (uint32_t beam_id = 0; beam_id < _num_beams; beam_id++) {
         kotekan::configUpdater::instance().subscribe(
