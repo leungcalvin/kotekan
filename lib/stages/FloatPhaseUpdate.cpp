@@ -56,7 +56,7 @@ void FloatPhaseUpdate::compute_phases(uint8_t* out_frame_int, const timespec& gp
     for (uint32_t b = beam_offset; b < (_num_local_beams + beam_offset); b++) {
         // Special case for forming a beam at the telescope zenith, e.g. only apply gains, no phases.  
 	    if (_beam_coord.scaling[b] == 1) { 
-            for (uint32_t i = 0; i < _num_elements * _num_local_freq * 2; ++i) {                             
+            for (uint32_t i = 0; i < _num_elements * _num_local_freq * 2; ++i) {
                 out_frame[b * _num_elements * _num_local_freq * 2 + i] = gains_frame[b * _num_elements * _num_local_freq * 2 + i];
             }
             continue;
@@ -97,7 +97,7 @@ void FloatPhaseUpdate::compute_phases(uint8_t* out_frame_int, const timespec& gp
                     uint offset = b * _num_local_freq * _num_elements + i * _num_elements;
 
                     // Not scrambled, assume reordering kernel has been run.
-                    out_frame[(offset + elem_id) * 2] =                                        
+                    out_frame[(offset + elem_id) * 2] =
                         delay_real * gains_frame[(offset + elem_id) * 2]
                         - delay_imag * gains_frame[(offset + elem_id) * 2 + 1];
                     out_frame[(offset + elem_id) * 2 + 1] =

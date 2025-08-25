@@ -178,11 +178,13 @@ void BeamformingPhaseUpdate::main_thread() {
             std::lock_guard<std::mutex> lock(beam_lock);
             // Set the metadata in the input frame to match what pointings we are
             // using at the time the phases are generated
-	    if (_beam_offset == 0) // Only update the metadata from one thread
+	        if (_beam_offset == 0) // Only update the metadata from one thread
                 set_beam_coord(in_buf, in_frame_id, _beam_coord);
+
             compute_phases(out_frame, gps_time, frequencies_in_frame, _beam_offset, gains_frame);
+
             if (_beam_offset == 0) // Only update the scaling from one thread
-	        copy_scaling(_beam_coord, scaling_frame);
+	            copy_scaling(_beam_coord, scaling_frame);
         }
 
         mark_frame_empty(in_buf, unique_name.c_str(), in_frame_id++);
