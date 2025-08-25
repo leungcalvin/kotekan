@@ -183,10 +183,6 @@ void BeamformingPhaseUpdate::main_thread() {
             compute_phases(out_frame, gps_time, frequencies_in_frame, _beam_offset, gains_frame);
             if (_beam_offset == 0) // Only update the scaling from one thread
 	        copy_scaling(_beam_coord, scaling_frame);
-	    //for (int i = 0; i < out_buf->frame_size/100; i += 2) {
-            //   INFO("phases[{:d}] = [{:f}, {:f}]", i/2, ((float*)out_frame)[i], ((float*)out_frame)[i+1]);
-	    //   INFO("gains[{:d}] = [{:f}, {:f}]", i/2, ((float*)gains_frame)[i], ((float*)gains_frame)[i+1]);
-	    //}
         }
 
         mark_frame_empty(in_buf, unique_name.c_str(), in_frame_id++);
