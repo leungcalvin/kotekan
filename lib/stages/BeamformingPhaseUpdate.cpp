@@ -127,7 +127,10 @@ void BeamformingPhaseUpdate::main_thread() {
 
     frameID in_frame_id(in_buf);
     frameID out_frame_id(out_buf);
-    frameID gains_frame_id(gains_buf);
+    // ID for the frame we are currently using, which we hold onto until there are new gains.
+    frameID gains_frame_current_id(gains_buf);
+    // ID for the next frame in the gains buffer, used to check for a new frame.
+    frameID gains_frame_next_id(gains_buf);
     uint8_t* gains_frame = nullptr;
     bool first_time = true;
 
@@ -145,21 +148,33 @@ void BeamformingPhaseUpdate::main_thread() {
         // If we have a gains buffer we check for new gains
         if (gains_buf != nullptr) {
             if (first_time) {
-                gains_frame = wait_for_full_frame(gains_buf, unique_name.c_str(), gains_frame_id++);
+                gains_frame = wait_for_full_frame(gains_buf, unique_name.c_str(), gains_frame_current_id);
+                // We always get the first frame at startup, so start looking for updates at +1
+                gains_frame_next_id++;
                 if (gains_frame == nullptr)
                     break;
                 first_time = false;
             } else {
                 auto timeout = double_to_ts(0);
+                // Check if there is a new frame of gains in buffer, if so use it,
+                // if not continute using the existing frame.
                 auto status = wait_for_full_frame_timeout(gains_buf, unique_name.c_str(),
-                                                          gains_frame_id, timeout);
+                                                          gains_frame_next_id, timeout);
                 if (status == -1) {
                     break;
                 }
+                // There is a new frame of gains so switch to using it.
                 if (status == 0) {
-                    mark_frame_empty(gains_buf, unique_name.c_str(), gains_frame_id++);
+                    // Release the current frame we are using.
+                    mark_frame_empty(gains_buf, unique_name.c_str(), gains_frame_current_id++);
+                    // The current frame should now be the same as the next frame we will get below.
+                    assert(gains_frame_current_id == gains_frame_next_id);
+                    // Update to the new frame.
                     gains_frame =
-                        wait_for_full_frame(gains_buf, unique_name.c_str(), gains_frame_id);
+                        wait_for_full_frame(gains_buf, unique_name.c_str(), gains_frame_next_id++);
+                    // In case we exit between the timeout wait, and the wait to get the frame pointer.
+                    if (gains_frame == nullptr)
+                        break;
                 }
             }
         }
