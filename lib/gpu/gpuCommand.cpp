@@ -1,6 +1,12 @@
 #include "gpuCommand.hpp"
 
-#include <iostream>
+#include "Config.hpp" // for Config
+
+#include <assert.h>  // for assert
+#include <exception> // for exception
+#include <regex>     // for match_results<>::_Base_type
+#include <stdexcept> // for runtime_error
+#include <vector>    // for vector
 
 using kotekan::bufferContainer;
 using kotekan::Config;
@@ -8,9 +14,10 @@ using kotekan::Config;
 using std::string;
 using std::to_string;
 
-gpuCommand::gpuCommand(Config& config_, const string& unique_name_, bufferContainer& host_buffers_,
-                       gpuDeviceInterface& device_, const string& default_kernel_command,
-                       const string& default_kernel_file_name) :
+gpuCommand::gpuCommand(Config& config_, const std::string& unique_name_,
+                       bufferContainer& host_buffers_, gpuDeviceInterface& device_,
+                       const std::string& default_kernel_command,
+                       const std::string& default_kernel_file_name) :
     kernel_command(default_kernel_command),
     kernel_file_name(default_kernel_file_name),
     config(config_),
@@ -20,7 +27,7 @@ gpuCommand::gpuCommand(Config& config_, const string& unique_name_, bufferContai
     _gpu_buffer_depth = config.get<int>(unique_name, "buffer_depth");
 
     // Set the local log level.
-    string s_log_level = config.get<string>(unique_name, "log_level");
+    std::string s_log_level = config.get<string>(unique_name, "log_level");
     set_log_level(s_log_level);
     set_log_prefix(unique_name);
 
@@ -31,6 +38,16 @@ gpuCommand::gpuCommand(Config& config_, const string& unique_name_, bufferContai
             + config.get_default<string>(unique_name, "kernel", default_kernel_file_name);
         kernel_command = config.get_default<string>(unique_name, "command", default_kernel_command);
     }
+
+    profiling = config.get_default<bool>(unique_name, "profiling", true);
+    if (profiling) {
+        frame_arrival_period = config.get<double>(unique_name, "frame_arrival_period");
+    }
+
+    excute_time = kotekan::KotekanTrackers::instance().add_tracker(
+        unique_name, get_name() + "_execute_time", "seconds");
+    utilization =
+        kotekan::KotekanTrackers::instance().add_tracker(unique_name, get_name() + "_u", "");
 }
 
 gpuCommand::~gpuCommand() {}
@@ -49,13 +66,17 @@ string& gpuCommand::get_name() {
     return kernel_command;
 }
 
+std::string gpuCommand::get_unique_name() const {
+    return unique_name;
+}
+
 void gpuCommand::pre_execute(int gpu_frame_id) {
     assert(gpu_frame_id < _gpu_buffer_depth);
     assert(gpu_frame_id >= 0);
 }
 
 double gpuCommand::get_last_gpu_execution_time() {
-    return last_gpu_execution_time;
+    return excute_time->get_current();
 }
 
 gpuCommandType gpuCommand::get_command_type() {

@@ -22,7 +22,7 @@
  * computes power and square power values. The kernel integrates those values and outputs a
  * normalized sum of square power values.
  *
- * @requires_kernel    rfi_chime_timesum_private.cl
+ * @requires_kernel    rfi_chime_time_sum_private.cl
  *
  * @par REST Endpoints
  * @endpoint    /rfi_time_sum_callback/<gpu_id> ``POST`` Update kernel parameters
@@ -58,7 +58,7 @@ class clRfiTimeSum : public gpu_command {
 public:
     // Constructor
     clRfiTimeSum(const char* param_gpuKernel, const char* param_name, kotekan::Config& config,
-                 const string& unique_name);
+                 const std::string& unique_name);
     // Destructor
     ~clRfiTimeSum();
     // Builds the program/kernel
@@ -86,7 +86,7 @@ private:
     /// The input mask array
     uint8_t* Input_Mask;
     /// String to hold endpoint name
-    string endpoint;
+    std::string endpoint;
 };
 
 #endif

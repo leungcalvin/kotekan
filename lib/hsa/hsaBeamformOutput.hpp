@@ -7,8 +7,15 @@
 #ifndef HSA_BEAMFORM_OUTPUT_DATA_H
 #define HSA_BEAMFORM_OUTPUT_DATA_H
 
-#include "hsaCommand.hpp"
+#include "Config.hpp"             // for Config
+#include "buffer.h"               // for Buffer
+#include "bufferContainer.hpp"    // for bufferContainer
+#include "hsa/hsa.h"              // for hsa_signal_t
+#include "hsaCommand.hpp"         // for hsaCommand
+#include "hsaDeviceInterface.hpp" // for hsaDeviceInterface
 
+#include <stdint.h> // for int32_t
+#include <string>   // for string
 /**
  * @class hsaBeamformOutput
  * @brief hsaCommand for copying FRB output gpu to host (for run with N2).
@@ -35,7 +42,7 @@
 class hsaBeamformOutputData : public hsaCommand {
 public:
     /// Constructor
-    hsaBeamformOutputData(kotekan::Config& config, const string& unique_name,
+    hsaBeamformOutputData(kotekan::Config& config, const std::string& unique_name,
                           kotekan::bufferContainer& host_buffers, hsaDeviceInterface& device);
 
     /// Destructor
@@ -58,9 +65,11 @@ private:
 
     /// ID for network_buffer
     int32_t network_buffer_id;
+    /// ID for network_buffer_precondition
+    int32_t network_buffer_precondition_id;
+
     /// ID for output_buffer
     int32_t output_buffer_id;
-
     /// ID for output_buffer_precondition
     int32_t output_buffer_precondition_id;
     /// ID for output_buffer_execute

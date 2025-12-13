@@ -1,20 +1,27 @@
 #include "visFileRing.hpp"
 
-#include <unistd.h>
+#include "visFile.hpp" // for REGISTER_VIS_FILE, _factory_aliasvisFile
+#include "visUtil.hpp" // for time_ctype
+
+#include "json.hpp" // for basic_json<>::value_type, json
+
+#include <errno.h>     // for errno
+#include <fcntl.h>     // for O_CREAT, O_WRONLY
+#include <ostream>     // for ofstream, basic_ostream::flush, basic_ostream::seekp, basi...
+#include <string.h>    // for size_t, strerror
+#include <sys/types.h> // for uint
+#include <unistd.h>    // for pwrite, TEMP_FAILURE_RETRY
+#include <vector>      // for vector
 
 // Register the HDF5 file writers
 REGISTER_VIS_FILE("ring", visFileRing);
 
 
-void visFileRing::create_file(const std::string& name,
-                              const std::map<std::string, std::string>& metadata, dset_id_t dataset,
-                              size_t max_time) {
-    // Set open flags to allow overwriting
-    oflags = O_CREAT | O_WRONLY;
-
-    visFileRaw::create_file(name, metadata, dataset, max_time);
-    file_len = max_time;
-}
+visFileRing::visFileRing(const std::string& name, const kotekan::logLevel log_level,
+                         const std::map<std::string, std::string>& metadata, dset_id_t dataset,
+                         size_t max_time) :
+    visFileRaw(name, log_level, metadata, dataset, max_time, O_CREAT | O_WRONLY),
+    file_len(max_time){};
 
 
 uint32_t visFileRing::extend_time(time_ctype new_time) {
@@ -38,8 +45,8 @@ uint32_t visFileRing::extend_time(time_ctype new_time) {
                 pwrite(fd, zeros.data(), frame_size, cur_pos * nb + i * frame_size));
 
             if (res < 0) {
-                ERROR("Write error attempting to write frame at time %d, freq %d: %s.", cur_pos, i,
-                      strerror(errno));
+                ERROR("Write error attempting to write frame at time {:d}, freq {:d}: {:s}.",
+                      cur_pos, i, strerror(errno));
             }
         }
 
@@ -68,7 +75,7 @@ void visFileRing::write_metadata() {
     // Update the metadata file
     file_metadata["structure"]["ntime"] = num_time();
     file_metadata["index_map"]["time"] = times;
-    std::vector<uint8_t> t = json::to_msgpack(file_metadata);
+    std::vector<uint8_t> t = nlohmann::json::to_msgpack(file_metadata);
     metadata_file.write((const char*)&t[0], t.size());
     metadata_file.flush();
     // Reset file position for next write

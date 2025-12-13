@@ -6,22 +6,30 @@
 #ifndef HSA_RFI_INPUT_SUM_H
 #define HSA_RFI_INPUT_SUM_H
 
-#include "hsaCommand.hpp"
-#include "restServer.hpp"
+#include "Config.hpp"             // for Config
+#include "buffer.h"               // for Buffer
+#include "bufferContainer.hpp"    // for bufferContainer
+#include "hsa/hsa.h"              // for hsa_signal_t
+#include "hsaCommand.hpp"         // for hsaCommand
+#include "hsaDeviceInterface.hpp" // for hsaDeviceInterface
+#include "restServer.hpp"         // for connectionInstance
 
-#include <mutex>
+#include "json.hpp" // for json
+
+#include <stdint.h> // for uint32_t, int32_t
+#include <string>   // for string
 
 /*
  * @class hsaRfiInputSum
  * @brief hsaCommand to compute the input sum and spectral kurtosis for RFI detection
  *
- * This is an hsaCommand that launches the kernel (rfi_chime_inputsum.hsaco) to perform
+ * This is an hsaCommand that launches the kernel (rfi_chime_input_sum.hsaco) to perform
  * a sum of normalized, time summed square power estimates (see hsaRfiTimeSum.hpp). The
  * sum is then used to calculate a spectral kurtosis estimate. The spectral kurtosis estimate
  * is a measure of the underlying gaussianity of the sample. Thus it can be used as a tool
  * to detect non-gaussian signals in CHIME's incoherent beam (RFI).
  *
- * @requires_kernel    rfi_chime_inputsum.hasco
+ * @requires_kernel    rfi_chime_input_sum.hasco
  *
  * @par REST Endpoints
  * @endpoint    /rfi_input_sum_callback/<gpu_id> ``POST`` Change kernel parameters
@@ -29,7 +37,7 @@
  *              update config             "num_bad_inputs"
  *
  * @par GPU Memory
- * @gpu_mem  timesum            Input data from the hsaRfiTimeSum command  of size input_frame_len
+ * @gpu_mem  time_sum           Input data from the hsaRfiTimeSum command  of size input_frame_len
  *     @gpu_mem_type            static
  *     @gpu_mem_format          Array of @c float
  *     @gpu_mem_metadata        chimeMetadata
@@ -57,28 +65,44 @@
 class hsaRfiInputSum : public hsaCommand {
 public:
     /// Constructor, initializes internal variables.
-    hsaRfiInputSum(kotekan::Config& config, const string& unique_name,
+    hsaRfiInputSum(kotekan::Config& config, const std::string& unique_name,
                    kotekan::bufferContainer& host_buffers, hsaDeviceInterface& device);
     /// Destructor, cleans up local allocs
     virtual ~hsaRfiInputSum();
     /// Rest server callback
-    void rest_callback(kotekan::connectionInstance& conn, json& json_request);
-    /// Executes rfi_chime_inputsum.hsaco kernel. Allocates kernel variables.
+    void rest_callback(kotekan::connectionInstance& conn, nlohmann::json& json_request);
+
+    int wait_on_precondition(int gpu_frame_id) override;
+
+    /// Executes rfi_chime_input_sum.hsaco kernel. Allocates kernel variables.
     hsa_signal_t execute(int gpu_frame_id, hsa_signal_t precede_signal) override;
 
+    void finalize_frame(int frame_id) override;
+
 private:
+    /// Main data input, used for metadata access
+    Buffer* _network_buf;
+
+    /// IDs for _network_buf
+    int32_t _network_buf_finalize_id;
+    int32_t _network_buf_execute_id;
+    int32_t _network_buf_precondition_id;
+
     /// Length of the input frame, should be sizeof_float x n_elem x n_freq x nsamp / sk_step
     uint32_t input_frame_len;
-    /// Length of the input frame, should be sizeof_float x n_freq x nsamp / sk_step
+    /// Length of the output frame, should be sizeof_float x n_freq x nsamp / sk_step
     uint32_t output_frame_len;
+    /// Length of the input variance frame, should be sizeof_float x n_elem x n_freq x nsamp /
+    /// sk_step
+    uint32_t input_var_frame_len;
+    /// Length of the output frame, should be sizeof_float x n_freq x nsamp / sk_step
+    uint32_t output_var_frame_len;
     /// Length of the input mask, should be sizeof_uchar x n_elem
     uint32_t input_mask_len;
     /// Length of the output mask, should be sizeof_uchar x n_freq x nsamp / sk_step
     uint32_t output_mask_len;
     /// Length of lost sample correction frame
     uint32_t correction_frame_len;
-    /// Array to hold the input mask (which inputs are currently functioning)
-    uint8_t* input_mask;
     /// Number of elements (2048 for CHIME or 256 for Pathfinder)
     uint32_t _num_elements;
     /// Number of frequencies per GPU (1 for CHIME or 8 for Pathfinder)
@@ -87,20 +111,10 @@ private:
     uint32_t _samples_per_data_set;
     /// Integration length of spectral kurtosis estimate in time
     uint32_t _sk_step;
-    /// The total number of faulty inputs
-    uint32_t _num_bad_inputs;
     /// The number of standard deviations in SK which constitute RFI
     uint32_t _rfi_sigma_cut;
-    /// Vector to hold a list of inputs which are currently malfunctioning
-    vector<int32_t> _bad_inputs;
-    /// Boolean to hold whether or not the current kernel execution is the first or not.
-    bool rebuild_input_mask;
-    /// Rest server callback mutex
-    std::mutex rest_callback_mutex;
-    /// Sring to hold endpoint name
-    string endpoint;
-    /// Config base (@TODO this is a huge hack replace with updatable config)
-    string config_base;
+    /// Truncation bias switch.
+    float _trunc_bias_switch;
 };
 
 #endif

@@ -7,24 +7,22 @@
 #ifndef BASEBAND_API_MANAGER_HPP
 #define BASEBAND_API_MANAGER_HPP
 
-#include "basebandReadoutManager.hpp"
-#include "gpsTime.h"
-#include "prometheusMetrics.hpp"
-#include "restServer.hpp"
+#include "basebandReadoutManager.hpp" // for basebandReadoutManager, basebandDumpStatus
+#include "prometheusMetrics.hpp"      // for Counter
+#include "restServer.hpp"             // for connectionInstance, restServer
 
-#include "json.hpp"
+#include "json.hpp" // for json
 
-#include <chrono>
-#include <condition_variable>
-#include <deque>
-#include <map>
-#include <memory>
+#include <map>      // for map, map<>::iterator
+#include <math.h>   // for M_PI
+#include <mutex>    // for mutex
+#include <stdint.h> // for uint32_t, int64_t, uint64_t
 
 
 namespace kotekan {
 
 /// Implicit conversion for constructing `nlohmann::json` from a `basebandDumpStatus`
-void to_json(json& j, const basebandDumpStatus& s);
+void to_json(nlohmann::json& j, const basebandDumpStatus& s);
 
 
 /**
@@ -35,7 +33,7 @@ void to_json(json& j, const basebandDumpStatus& s);
  * using the @c register_with_server() function.
  *
  * This class is a singleton, and can be accessed with @c instance(). The normal
- * use is for the @c basebandReadout stage to call @get_next_request in a
+ * use is for the @c basebandReadout stage to call @c get_next_request in a
  * loop, and when the result is non-null, use the returned @c basebandDumpStatus
  * to keep track of the data written so far. Once the writing of the data file
  * is completed, the ``state`` of the request should be set to ``DONE``.
@@ -62,10 +60,15 @@ public:
     void register_with_server(restServer* rest_server);
 
     /**
-     * @brief The call back function for GET requests to `/baseband`.
+     * @brief The call back function for GET requests to `/baseband[?event_id=<event_id>]`
      *
      * The function sends over `conn` an HTTP response with the status of all
      * baseband dumps received since this instance started running.
+     *
+     * If the query option `?event_id=<event_id>` is provided in the URL then
+     * the function @c status_callback_single_event() is called to return
+     * just the information related to that single event_id.
+     * See @c status_callback_single_event() for details of the return message in that case.
      *
      * The response is a JSON dictionary, with keys of unique ids of the
      * baseband events. The key's value is the status of that baseband dump, and
@@ -91,7 +94,7 @@ public:
     void status_callback_all(connectionInstance& conn);
 
     /**
-     * @brief The call back function for GET requests to `/baseband/:event_id`.
+     * @brief Helper function for GET requests to `/baseband?event_id=<event_id>`.
      *
      * The function sends over `conn` an HTTP response with the status of a
      * specified baseband dump. The response is a JSON list, with an element for
@@ -155,7 +158,7 @@ public:
      * @param conn The connection instance to send results to
      * @param request JSON dictionary with the request data
      */
-    void handle_request_callback(connectionInstance& conn, json& request);
+    void handle_request_callback(connectionInstance& conn, nlohmann::json& request);
 
     /**
      * @brief Register a readout stage for specified frequency
@@ -168,19 +171,6 @@ public:
 private:
     /// Constructor, not used directly
     basebandApiManager();
-
-    /// Sampling frequency (Hz)
-    static constexpr double ADC_SAMPLE_RATE = 800e6;
-
-    /// Number of samples in the inital FFT in the F-engine.
-    static constexpr double FPGA_NSAMP_FFT = 2048;
-
-    /// FPGA clock rate (Hz)
-    static constexpr double FPGA_FRAME_RATE = 1. / (FPGA_PERIOD_NS * 1E-9); // =390,625
-    // Can also be done as FPGA_FRAME_RATE = ADC_SAMPLE_RATE / FPGA_NSAMP_FFT
-
-    /// Width of frequency bin, used to calculate frequency of an index, relative to FPGA_FREQ0
-    static constexpr double FPGA_DELTA_FREQ = -ADC_SAMPLE_RATE / FPGA_NSAMP_FFT;
 
     /// Physical constant: elementary charge (C)
     static constexpr double ELEMENTARY_CHARGE = 1.6021766208e-19;
@@ -202,9 +192,6 @@ private:
 
     /// Reference frequency in the L1 subsystem. (TODO verify. May be off by 1 bin.)
     static constexpr double L1_REFERERENCE_FREQ = 400e6;
-
-    /// TODO verify. I'm assuming dm_error is 1-sigma.
-    static constexpr double N_DM_ERROR_TOL = 3;
 
     /// convenience wrapper for a pair of starting FPGA frame and length of the dump in FPGA frames
     struct basebandSlice {
@@ -239,8 +226,7 @@ private:
     /// Map of registered readout stages, indexed by `freq_id`
     basebandReadoutRegistry readout_registry;
 
-    prometheusMetrics& metrics;
-    uint32_t request_count = 0;
+    prometheus::Counter& request_counter;
 };
 
 } // namespace kotekan

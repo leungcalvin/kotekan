@@ -1,8 +1,20 @@
 #include "bufferFactory.hpp"
 
-#include "Config.hpp"
-#include "metadata.h"
-#include "visBuffer.hpp"
+#include "Config.hpp"         // for Config
+#include "HFBFrameView.hpp"   // for HFBFrameView
+#include "buffer.h"           // for create_buffer
+#include "kotekanLogging.hpp" // for INFO_NON_OO
+#include "metadata.h"         // for metadataPool // IWYU pragma: keep
+#include "visBuffer.hpp"      // for VisFrameView
+
+#include "fmt.hpp" // for format, fmt
+
+#include <cstdint>   // for int32_t, uint32_t
+#include <exception> // for exception
+#include <regex>     // for match_results<>::_Base_type
+#include <stddef.h>  // for size_t
+#include <stdexcept> // for runtime_error
+#include <vector>    // for vector
 
 using json = nlohmann::json;
 using std::map;
@@ -25,10 +37,10 @@ map<string, struct Buffer*> bufferFactory::build_buffers() {
     return buffers;
 }
 
-void bufferFactory::build_from_tree(map<string, struct Buffer*>& buffers, json& config_tree,
+void bufferFactory::build_from_tree(map<string, struct Buffer*>& buffers, const json& config_tree,
                                     const string& path) {
 
-    for (json::iterator it = config_tree.begin(); it != config_tree.end(); ++it) {
+    for (json::const_iterator it = config_tree.begin(); it != config_tree.end(); ++it) {
         // If the item isn't an object we can just ignore it.
         if (!it.value().is_object()) {
             continue;
@@ -39,58 +51,58 @@ void bufferFactory::build_from_tree(map<string, struct Buffer*>& buffers, json& 
         if (buffer_type != "none") {
             string name = it.key();
             if (buffers.count(name) != 0) {
-                throw std::runtime_error("The buffer named " + name + " has already been defined!");
+                throw std::runtime_error(
+                    fmt::format(fmt("The buffer named {:s} has already been defined!"), name));
             }
-            buffers[name] = new_buffer(buffer_type, name, path + "/" + it.key());
+            buffers[name] =
+                new_buffer(buffer_type, name, fmt::format(fmt("{:s}/{:s}"), path, it.key()));
             continue;
         }
 
         // Recursive part.
         // This is a section/scope not a buffer block.
-        build_from_tree(buffers, it.value(), path + "/" + it.key());
+        build_from_tree(buffers, it.value(), fmt::format(fmt("{:s}/{:s}"), path, it.key()));
     }
 }
 
 struct Buffer* bufferFactory::new_buffer(const string& type_name, const string& name,
                                          const string& location) {
 
-    // DEBUG("Creating buffer of type: %s, at config tree path: %s", name.c_str(),
-    // location.c_str());
+    // DEBUG("Creating buffer of type: {:s}, at config tree path: {:s}", name, location);
     uint32_t num_frames = config.get<uint32_t>(location, "num_frames");
-    string metadataPool_name = config.get<std::string>(location, "metadata_pool");
-    if (metadataPools.count(metadataPool_name) != 1) {
-        throw std::runtime_error("The buffer " + name + " is requesting metadata pool named "
-                                 + metadataPool_name + " but no pool exists.");
-    }
-    struct metadataPool* pool = metadataPools[metadataPool_name];
+    string metadataPool_name = config.get_default<std::string>(location, "metadata_pool", "none");
+    int32_t numa_node = config.get_default<int32_t>(location, "numa_node", 0);
 
+    struct metadataPool* pool = nullptr;
+    if (metadataPool_name != "none") {
+        if (metadataPools.count(metadataPool_name) != 1) {
+            throw std::runtime_error(fmt::format(
+                fmt("The buffer {:s} is requesting metadata pool named {:s} but no pool exists."),
+                name, metadataPool_name));
+        }
+        pool = metadataPools[metadataPool_name];
+    }
+
+    size_t frame_size = 0;
     if (type_name == "standard") {
-        uint32_t frame_size = config.get<uint32_t>(location, "frame_size");
-        INFO("Creating standard buffer named %s, with %d frames, frame_size of %d, and metadata "
-             "pool %s",
-             name.c_str(), num_frames, frame_size, metadataPool_name.c_str());
-        return create_buffer(num_frames, frame_size, pool, name.c_str());
+        frame_size = config.get<uint32_t>(location, "frame_size");
     }
 
     if (type_name == "vis") {
-        int num_elements = config.get<int>(location, "num_elements");
-        int num_ev = config.get<int>(location, "num_ev");
-        int num_prod = config.get_default<int>(location, "num_prod", -1);
-
-        if (num_prod < 0) {
-            num_prod = num_elements * (num_elements + 1) / 2;
-        }
-
-        auto layout = visFrameView::calculate_buffer_layout(num_elements, num_prod, num_ev);
-        uint32_t frame_size = layout.first;
-
-        INFO("Creating visBuffer named %s with %d frames, frame size of %d and metadata pool %s",
-             name.c_str(), num_frames, frame_size, metadataPool_name.c_str());
-        return create_buffer(num_frames, frame_size, pool, name.c_str());
+        frame_size = VisFrameView::calculate_frame_size(config, location);
     }
 
+    if (type_name == "hfb") {
+        frame_size = HFBFrameView::calculate_frame_size(config, location);
+    }
+
+    INFO_NON_OO("Creating {:s}Buffer named {:s} with {:d} frames, frame size of {:d} and "
+                "metadata pool {:s} on numa_node {:d}",
+                type_name, name, num_frames, frame_size, metadataPool_name, numa_node);
+    return create_buffer(num_frames, frame_size, pool, name.c_str(), type_name.c_str(), numa_node);
+
     // No metadata found
-    throw std::runtime_error("No buffer type named: " + name);
+    throw std::runtime_error(fmt::format(fmt("No buffer type named: {:s}"), name));
 }
 
 } // namespace kotekan

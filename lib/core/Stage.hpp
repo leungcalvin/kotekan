@@ -1,16 +1,19 @@
 #ifndef KOTEKAN_STAGE_H
 #define KOTEKAN_STAGE_H
 
-#include "Config.hpp"
-#include "StageFactory.hpp"
-#include "bufferContainer.hpp"
-#include "kotekanLogging.hpp"
+#include "Config.hpp"          // for Config
+#include "bufferContainer.hpp" // for bufferContainer
+#include "kotekanLogging.hpp"  // for kotekanLogging
 
-#include <atomic>
-#include <functional>
-#include <mutex>
-#include <thread>
-#include <vector>
+#include <atomic>      // for atomic_bool
+#include <functional>  // for function
+#include <mutex>       // for mutex
+#include <stdint.h>    // for uint32_t
+#include <string>      // for string
+#include <sys/types.h> // for pid_t
+#include <thread>      // for thread
+#include <vector>      // for vector
+
 #ifdef MAC_OSX
 #include "osxBindCPU.hpp"
 
@@ -21,7 +24,7 @@ namespace kotekan {
 
 class Stage : public kotekanLogging {
 public:
-    Stage(Config& config, const string& unique_name, bufferContainer& buffer_container,
+    Stage(Config& config, const std::string& unique_name, bufferContainer& buffer_container,
           std::function<void(const Stage&)> main_thread_ref);
     virtual ~Stage();
     virtual void start();
@@ -39,6 +42,30 @@ public:
      */
     void join();
     void stop();
+
+    /**
+     * @brief Generates a graphviz "dot" string for this stage.
+     *
+     * By default this is just the stage name plus some default formatting.
+     *
+     * @return "dot" style graph description for this stage.
+     */
+    virtual std::string dot_string(const std::string& prefix) const;
+
+    /**
+     * @brief Add newly created stage tid to thread_list for cpu usage tracking.
+     */
+    void register_tid(pid_t ptr);
+
+    /**
+     * @brief Remove a tid from thread_list.
+     */
+    void unregister_tid(pid_t ptr);
+
+    /**
+     * @brief Get tids from the current stage.
+     */
+    const std::vector<pid_t>& get_tids();
 
 protected:
     std::atomic_bool stop_thread;
@@ -87,6 +114,9 @@ private:
     /// The number of seconds to wait for a kotekan stage thread to be
     /// joined after the exit signal has been given before exiting ungracefully.
     uint32_t join_timeout;
+
+    // List of stage tids used for CPU usage tracking
+    std::vector<pid_t> thread_list;
 };
 
 } // namespace kotekan
@@ -94,7 +124,8 @@ private:
 /// Helper defined to reduce the boiler plate needed to crate the
 /// standarized constructor in sub classes
 #define STAGE_CONSTRUCTOR(T)                                                                       \
-    T::T(Config& config, const string& unique_name, bufferContainer& buffer_container) :           \
+    T::T(kotekan::Config& config, const std::string& unique_name,                                  \
+         kotekan::bufferContainer& buffer_container) :                                             \
         Stage(config, unique_name, buffer_container, std::bind(&T::main_thread, this))
 
 #endif /* KOTEKAN_STAGE_H */

@@ -1,11 +1,21 @@
 #include "hsaRfiZeroData.hpp"
 
-#include "configUpdater.hpp"
-#include "hsaBase.h"
+#include "Config.hpp"             // for Config
+#include "buffer.h"               // for Buffer
+#include "bufferContainer.hpp"    // for bufferContainer
+#include "chimeMetadata.hpp"      // for set_rfi_zeroed
+#include "configUpdater.hpp"      // for configUpdater
+#include "gpuCommand.hpp"         // for gpuCommandType, gpuCommandType::KERNEL
+#include "hsaDeviceInterface.hpp" // for hsaDeviceInterface, Config
+#include "kotekanLogging.hpp"     // for INFO, WARN
 
-#include <math.h>
-#include <mutex>
-#include <unistd.h>
+#include <exception>  // for exception
+#include <functional> // for _Bind_helper<>::type, _Placeholder, bind, _1, placehol...
+#include <mutex>      // for lock_guard, mutex
+#include <regex>      // for match_results<>::_Base_type
+#include <stdexcept>  // for runtime_error
+#include <string.h>   // for memcpy, memset
+#include <vector>     // for vector
 
 using kotekan::bufferContainer;
 using kotekan::Config;
@@ -13,9 +23,9 @@ using kotekan::configUpdater;
 
 REGISTER_HSA_COMMAND(hsaRfiZeroData);
 
-hsaRfiZeroData::hsaRfiZeroData(Config& config, const string& unique_name,
+hsaRfiZeroData::hsaRfiZeroData(Config& config, const std::string& unique_name,
                                bufferContainer& host_buffers, hsaDeviceInterface& device) :
-    hsaCommand(config, unique_name, host_buffers, device, "rfi_chime_zero",
+    hsaCommand(config, unique_name, host_buffers, device, "rfi_chime_zero" KERNEL_EXT,
                "rfi_chime_zero.hsaco") {
     command_type = gpuCommandType::KERNEL;
     // Retrieve parameters from kotekan config
@@ -29,7 +39,7 @@ hsaRfiZeroData::hsaRfiZeroData(Config& config, const string& unique_name,
     mask_len = sizeof(uint8_t) * _num_local_freq * _samples_per_data_set / _sk_step;
     using namespace std::placeholders;
     configUpdater::instance().subscribe(
-        config.get<std::string>(unique_name, "updatable_rfi_zeroing"),
+        config.get<std::string>(unique_name, "updatable_config/rfi_zeroing_toggle"),
         std::bind(&hsaRfiZeroData::update_rfi_zero_flag, this, _1));
     network_buf = host_buffers.get_buffer("network_buf");
     network_buffer_id = 0;
@@ -40,12 +50,12 @@ hsaRfiZeroData::~hsaRfiZeroData() {}
 bool hsaRfiZeroData::update_rfi_zero_flag(nlohmann::json& json) {
     std::lock_guard<std::mutex> lock(rest_callback_mutex);
     try {
-        _rfi_zeroing = json.at("rfi_zeroing");
+        _rfi_zeroing = json["rfi_zeroing"].get<bool>();
     } catch (std::exception& e) {
-        WARN("Failed to set RFI zeroing flag %s", e.what());
+        WARN("Failed to set RFI zeroing flag {:s}", e.what());
         return false;
     }
-    INFO("Changing RFI zero flag to %d", _rfi_zeroing);
+    INFO("Changing RFI zero flag to {:d}", _rfi_zeroing);
     return true;
 }
 

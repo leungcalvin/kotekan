@@ -1,5 +1,5 @@
 /**
- * @file clCommand.h
+ * @file clCommand.hpp
  * @brief Base class for defining openCL commands to execute on GPUs
  *  - clCommand
  */
@@ -39,13 +39,18 @@
 class clCommand : public gpuCommand {
 public:
     /** Kernel file name is optional.
-     * @param device  The instance of the clDeviceInterface class that abstracts the interfacing
-     *                      layer between the software and hardware.
+     * @param config                    kotekan config object
+     * @param unique_name               kotekan unique name
+     * @param host_buffers              kotekan host-side buffers
+     * @param device                    The instance of the clDeviceInterface class that abstracts
+     *                                  the interfacing layer between the software and hardware.
+     * @param default_kernel_command    (optional) function name / proper name for a derived command
+     * @param default_kernel_file_name  (optional) external file (e.g. CL) used by a command
      **/
-    clCommand(kotekan::Config& config, const string& unique_name,
+    clCommand(kotekan::Config& config, const std::string& unique_name,
               kotekan::bufferContainer& host_buffers, clDeviceInterface& device,
-              const string& default_kernel_command = "",
-              const string& default_kernel_file_name = "");
+              const std::string& default_kernel_command = "",
+              const std::string& default_kernel_file_name = "");
     /// Destructor that frees memory for the kernel and name.
     virtual ~clCommand();
 
@@ -88,8 +93,8 @@ protected:
 };
 
 // Create a factory for clCommands
-CREATE_FACTORY(clCommand, // const string &, const string &,
-               kotekan::Config&, const string&, kotekan::bufferContainer&, clDeviceInterface&);
+CREATE_FACTORY(clCommand, // const std::string &, const std::string &,
+               kotekan::Config&, const std::string&, kotekan::bufferContainer&, clDeviceInterface&);
 #define REGISTER_CL_COMMAND(newCommand)                                                            \
     REGISTER_NAMED_TYPE_WITH_FACTORY(clCommand, newCommand, #newCommand)
 

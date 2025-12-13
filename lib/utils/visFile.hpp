@@ -7,17 +7,20 @@
 #ifndef VIS_FILE_HPP
 #define VIS_FILE_HPP
 
-#include "datasetManager.hpp"
-#include "errors.h"
-#include "visBuffer.hpp"
-#include "visUtil.hpp"
+#include "FrameView.hpp"      // for FrameView
+#include "dataset.hpp"        // for dset_id_t
+#include "factory.hpp"        // for CREATE_FACTORY, FACTORY, Factory, REGISTER_NAMED_TYPE_WITH...
+#include "kotekanLogging.hpp" // for logLevel, kotekanLogging, DEBUG
+#include "visUtil.hpp"        // for time_ctype, operator<
 
-#include "fmt.hpp"
-
-#include <cstdint>
-#include <iostream>
-#include <map>
-#include <memory>
+#include <cstdint>    // for uint32_t
+#include <functional> // for function
+#include <map>        // for map, map<>::mapped_type
+#include <memory>     // for allocator, shared_ptr, __shared_ptr_access
+#include <stddef.h>   // for size_t
+#include <string>     // for string, operator+, char_traits
+#include <tuple>      // for tie, tuple
+#include <utility>    // for pair, forward
 
 /** @brief A base class for files holding correlator data.
  *
@@ -28,7 +31,7 @@
  *
  * @author Richard Shaw
  **/
-class visFile {
+class visFile : public kotekan::kotekanLogging {
 
 public:
     virtual ~visFile() = default;
@@ -37,13 +40,13 @@ public:
      *
      * This is the entry point to an abstract visFile factory.
      *
-     *  @param type Type of the file to write.
-     *  @param name Name of the file to write
-     *  @param args Arguments forwarded to create_file.
+     *  @param  type  Type of the file to write.
+     *  @param  name  Name of the file to write
+     *  @param  args  Arguments forwarded to create_file.
      **/
     template<typename... CreateArgs>
     static std::shared_ptr<visFile> create(const std::string& type, const std::string& name,
-                                           CreateArgs&&... args);
+                                           CreateArgs... args);
 
     /**
      * @brief Extend the file to a new time sample.
@@ -74,7 +77,7 @@ public:
      * @param freq_ind Frequency index to write into.
      * @param frame Frame to write out.
      **/
-    virtual void write_sample(uint32_t time_ind, uint32_t freq_ind, const visFrameView& frame) = 0;
+    virtual void write_sample(uint32_t time_ind, uint32_t freq_ind, const FrameView& frame) = 0;
 
     /**
      * @brief Return the current number of current time samples.
@@ -83,70 +86,27 @@ public:
      **/
     virtual size_t num_time() = 0;
 
-    /**
-     * @brief Register a compatible visFile type.
-     * @param type Name of type.
-     **/
-    template<typename T>
-    static inline int register_file_type(const std::string type);
-
-
 protected:
-    /** @brief Create the file.
-     *
-     * This variant uses the datasetManager to look up properties of the
-     * dataset that we are dealing with.
-     *
-     *  @param name     Name of the file to write
-     *  @param metadata Textual metadata to write into the file.
-     *  @param dataset  ID of dataset we are writing.
-     *  @param max_time Maximum number of times to write into the file.
-     **/
-    // TODO: decide if the num_ev can be eliminated.
-    virtual void create_file(const std::string& name,
-                             const std::map<std::string, std::string>& metadata, dset_id_t dataset,
-                             size_t max_time) = 0;
-
-    // Private constructor to discourage creation of subclasses outside of the
-    // create routine
-    visFile(){};
-
     // Save the size for when we are outside of HDF5 space
     size_t nfreq, nprod, ninput, nev, ntime = 0;
-
-private:
-    static std::map<std::string, std::function<visFile*()>>& _registered_types();
 };
+
+CREATE_FACTORY(visFile, const std::string& /*name*/, const kotekan::logLevel /*log_level*/,
+               const std::map<std::string, std::string>& /*metadata*/, dset_id_t /*dataset*/,
+               size_t /*max_time*/);
+
+
+#define REGISTER_VIS_FILE(key, T) REGISTER_NAMED_TYPE_WITH_FACTORY(visFile, T, key)
 
 
 // Abstract factory VisFile creator.
 // Forwards on an argument pack. Actual arguments defined on visFile::create_file
 template<typename... CreateArgs>
 inline std::shared_ptr<visFile> visFile::create(const std::string& type, const std::string& name,
-                                                CreateArgs&&... args) {
+                                                CreateArgs... args) {
 
-    auto& _type_list = _registered_types();
-
-    if (_type_list.find(type) == _type_list.end()) {
-        throw std::runtime_error(fmt::format("Cannot create visFile of unknown type {}", type));
-    }
-
-    // Lookup the registered file and create an instance
-    INFO("Creating file %s of type %s", name.c_str(), type.c_str());
-    auto file = std::shared_ptr<visFile>(_type_list[type]());
-    file->create_file(name, std::forward<CreateArgs>(args)...);
-
-    return file;
+    return FACTORY(visFile)::create_shared(type, name, std::forward<CreateArgs>(args)...);
 }
-
-// Add a function to the type map that creates a type map.
-template<typename T>
-inline int visFile::register_file_type(const std::string key) {
-    std::cout << "Registering file type: " << key << std::endl;
-    _registered_types()[key] = []() { return new T(); };
-    return 0;
-}
-
 
 /**
  * @brief Manage the set of correlator files being written.
@@ -158,31 +118,34 @@ inline int visFile::register_file_type(const std::string key) {
  *
  * @author Richard Shaw
  **/
-class visFileBundle {
+class visFileBundle : public kotekan::kotekanLogging {
 
 public:
     /**
      * Initialise the file bundle
+     * @param type Type of the files to write.
      * @param root_path Directory to write into.
-     * @param inst_name Instrument name (e.g. chime)
-     * @param freq_chunk ID of the frequency chunk being written
+     * @param acq_fmt Acquistion name format (e.g. chime_corr)
+     * @param file_fmt File name format (e.g. {"hfb_", "freq_chunk"})
+     * @param metadata  Textual metadata to write into the files.
      * @param rollover Maximum time length of file.
      * @param window_size Number of "active" timesamples to keep.
-     * @param ... Arguments passed through to `visFile::visFile`.
+     * @param log_level kotekan log level for any logging generated by the visFileBundle instance
+     * @param args Arguments passed through to `visFile::visFile`.
      *
      * @warning The directory will not be created if it doesn't exist.
      **/
     template<typename... InitArgs>
-    visFileBundle(const std::string& type, const std::string& root_path,
-                  const std::string& instrument_name,
-                  const std::map<std::string, std::string>& metadata, int freq_chunk,
-                  size_t rollover, size_t window_size, InitArgs... args);
+    visFileBundle(const std::string& type, const std::string& root_path, const std::string& acq_fmt,
+                  const std::string& file_fmt, const std::map<std::string, std::string>& metadata,
+                  size_t rollover, size_t window_size, const kotekan::logLevel log_level,
+                  InitArgs... args);
 
     /**
      * Write a new time sample into this set of files
-     * @param new_time Time of sample
-     * @param ...      Arguments passed through to `visFile::write_sample`
-     * @return True if an error occured while writing
+     * @param  new_time  Time of sample
+     * @param  args      Arguments passed through to `visFile::write_sample`
+     * @return           True if an error occurred while writing
      **/
     template<typename... WriteArgs>
     bool add_sample(time_ctype new_time, WriteArgs&&... args);
@@ -209,8 +172,8 @@ protected:
 
     const std::string root_path;
 
-    const std::string instrument_name;
-    const int freq_chunk;
+    const std::string acq_fmt;
+    const std::string file_fmt;
 
     size_t rollover;
     size_t window_size;
@@ -222,79 +185,34 @@ protected:
     bool change_file = false;
 };
 
-/**
- * @brief Extension to visFileBundle to manage buffer files for the
- *        calibration broker.
- *
- * This version is intended to write to a single file, with a
- * static user defined file name. The file mapping can be cleared
- * so that a new file is written to and the previous one is available
- * for reading. Swapping these files is managed by visCalWriter.
- *
- * @author Tristan Pinsonneault-Marotee
- **/
-class visCalFileBundle : public visFileBundle {
-
-public:
-    /**
-     * Initialise the file bundle
-     * @param root_path Directory to write into.
-     * @param inst_name Instrument name (e.g. chime)
-     * @param freq_chunk ID of the frequency chunk being written
-     * @param rollover Maximum time length of file.
-     * @param window_size Number of "active" timesamples to keep.
-     * @param ... Arguments passed through to `visFile::visFile`.
-     *
-     * @warning The directory will not be created if it doesn't exist.
-     **/
-    template<typename... Args>
-    visCalFileBundle(Args&&... args) : visFileBundle(std::forward<Args>(args)...) {
-        // Override the rollover setting for the calibration bundles
-        rollover = 0;
-    }
-
-    /**
-     * Set the file name to write to.
-     **/
-    void set_file_name(std::string file_name, std::string acq_name);
-
-    /**
-     * Add a new file to the map of open files and let the
-     * previous one be flushed out as samples come in.
-     **/
-    void swap_file(std::string new_fname, std::string new_aname);
-
-protected:
-    // Override parent method to use a set file name
-    void add_file(time_ctype first_time) override;
-
-    std::string acq_name, file_name;
-};
-
-
+// NOTE: in this we need to pass the variadic arguments by value and not attempt
+// to forward them. This is because in C++17 we can't capture a variadic
+// parameter pack into the lambda perfectly.
 template<typename... InitArgs>
 inline visFileBundle::visFileBundle(const std::string& type, const std::string& root_path,
-                                    const std::string& instrument_name,
+                                    const std::string& acq_fmt, const std::string& file_fmt,
                                     const std::map<std::string, std::string>& metadata,
-                                    int freq_chunk, size_t rollover, size_t window_size,
-                                    InitArgs... args) :
+                                    size_t rollover, size_t window_size,
+                                    const kotekan::logLevel log_level, InitArgs... args) :
     root_path(root_path),
-    instrument_name(instrument_name),
-    freq_chunk(freq_chunk),
+    acq_fmt(acq_fmt),
+    file_fmt(file_fmt),
     rollover(rollover),
     window_size(window_size) {
+
+    set_log_level(log_level);
 
     // Make a lambda function that creates a file. This is a little convoluted,
     // but is the easiest way of passing on the variadic arguments to the
     // constructor into the file creation.
-    mk_file = [type, metadata, args...](std::string file_name, std::string acq_name,
-                                        std::string root_path) {
+    mk_file = [type, metadata, log_level, args...](std::string file_name, std::string acq_name,
+                                                   std::string root_path) {
         // Add the acq name to the metadata
         auto metadata_acq = metadata;
         metadata_acq["acquisition_name"] = acq_name;
 
         std::string abspath = root_path + '/' + acq_name + '/' + file_name;
-        return visFile::create(type, abspath, metadata_acq, args...);
+        return visFile::create(type, abspath, log_level, metadata_acq, args...);
     };
 }
 
@@ -315,25 +233,12 @@ inline bool visFileBundle::add_sample(time_ctype new_time, WriteArgs&&... args) 
     }
 }
 
-// template<typename... InitArgs>
-// inline visCalFileBundle::visCalFileBundle(const std::string& type,
-//                                   const std::string& root_path,
-//                                   const std::string& instrument_name,
-//                                   const std::map<std::string, std::string>& metadata,
-//                                   int freq_chunk,
-//                                   size_t rollover, size_t window_size,
-//                                   InitArgs... args) :
-//    visFileBundle::visFileBundle(type, root_path, instrument_name, metadata,
-//                                 freq_chunk, rollover, window_size, args...) {}
-//
 /**
  * @brief Create a lock file for the given file.
  * @param filename Name of file to lock.
  * @return The name of the lock file.
  **/
 std::string create_lockfile(std::string filename);
-
-#define REGISTER_VIS_FILE(key, T) int _register_##T = visFile::register_file_type<T>(key)
 
 
 // Implementation of TEMP_FAILURE_RETRY for file writing which is missing on MacOS

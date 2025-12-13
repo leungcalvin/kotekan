@@ -1,7 +1,25 @@
 #include "visNoise.hpp"
 
-#include "errors.h"
-#include "visBuffer.hpp"
+#include "Config.hpp"          // for Config
+#include "StageFactory.hpp"    // for REGISTER_KOTEKAN_STAGE, StageMakerTemplate
+#include "buffer.h"            // for mark_frame_empty, mark_frame_full, register_consumer, reg...
+#include "bufferContainer.hpp" // for bufferContainer
+#include "kotekanLogging.hpp"  // for INFO
+#include "visBuffer.hpp"       // for VisFrameView
+#include "visUtil.hpp"         // for cfloat
+
+#include "gsl-lite.hpp" // for span
+
+#include <atomic>     // for atomic_bool
+#include <cmath>      // for pow
+#include <complex>    // for complex
+#include <exception>  // for exception
+#include <functional> // for _Bind_helper<>::type, bind, function
+#include <regex>      // for match_results<>::_Base_type
+#include <stdexcept>  // for invalid_argument, runtime_error
+#include <stdint.h>   // for uint32_t
+#include <vector>     // for vector
+
 
 using kotekan::bufferContainer;
 using kotekan::Config;
@@ -9,7 +27,8 @@ using kotekan::Stage;
 
 REGISTER_KOTEKAN_STAGE(visNoise);
 
-visNoise::visNoise(Config& config, const string& unique_name, bufferContainer& buffer_container) :
+visNoise::visNoise(Config& config, const std::string& unique_name,
+                   bufferContainer& buffer_container) :
     Stage(config, unique_name, buffer_container, std::bind(&visNoise::main_thread, this)) {
 
     // Setup the buffers
@@ -34,7 +53,7 @@ visNoise::visNoise(Config& config, const string& unique_name, bufferContainer& b
         INFO("visNoise: random seed used for init of noise generation.");
     }
 
-    INFO("visNoise: producing gaussian noise with standard deviation %f.", _standard_deviation);
+    INFO("visNoise: producing gaussian noise with standard deviation {:f}.", _standard_deviation);
 }
 
 void visNoise::main_thread() {
@@ -58,7 +77,7 @@ void visNoise::main_thread() {
             break;
         }
         // Copy frame into output buffer
-        auto frame = visFrameView::copy_frame(buf_in, frame_id_in, buf_out, frame_id_out);
+        auto frame = VisFrameView::copy_frame(buf_in, frame_id_in, buf_out, frame_id_out);
 
         // Add noise to visibilities
         int ind = 0;

@@ -1,5 +1,20 @@
 #include "hsaCommand.hpp"
 
+#include "Config.hpp"             // for Config
+#include "hsa/hsa_ext_amd.h"      // for hsa_amd_profiling_async_copy_time_t, hsa_amd_profiling...
+#include "hsaBase.h"              // for HSA_CHECK, hsa_host_free, hsa_host_malloc
+#include "hsaDeviceInterface.hpp" // for hsaDeviceInterface, Config
+#include "kotekanLogging.hpp"     // for INFO
+
+#include <assert.h>  // for assert
+#include <exception> // for exception
+#include <fstream>   // for ifstream, operator|, basic_istream::seekg, ios, basic_...
+#include <regex>     // for match_results<>::_Base_type
+#include <stdexcept> // for runtime_error
+#include <stdlib.h>  // for free, malloc
+#include <string.h>  // for memset, size_t
+#include <vector>    // for vector
+
 using kotekan::bufferContainer;
 using kotekan::Config;
 
@@ -7,29 +22,32 @@ using std::string;
 
 #define MAX_ARGS_LEN 64
 
-hsaCommand::hsaCommand(Config& config_, const string& unique_name_, bufferContainer& host_buffers_,
-                       hsaDeviceInterface& device_, const string& default_kernel_command,
-                       const string& default_kernel_file_name) :
+hsaCommand::hsaCommand(Config& config_, const std::string& unique_name_,
+                       bufferContainer& host_buffers_, hsaDeviceInterface& device_,
+                       const std::string& default_kernel_command,
+                       const std::string& default_kernel_file_name) :
     gpuCommand(config_, unique_name_, host_buffers_, device_, default_kernel_command,
                default_kernel_file_name),
     device(device_) {
     _gpu_buffer_depth = config.get<int>(unique_name, "buffer_depth");
 
     // Set the local log level.
-    string s_log_level = config.get<std::string>(unique_name, "log_level");
+    std::string s_log_level = config.get<std::string>(unique_name, "log_level");
     set_log_level(s_log_level);
     set_log_prefix(unique_name);
 
-    signals = (hsa_signal_t*)hsa_host_malloc(_gpu_buffer_depth * sizeof(hsa_signal_t));
+    signals = (hsa_signal_t*)hsa_host_malloc(_gpu_buffer_depth * sizeof(hsa_signal_t),
+                                             device.get_gpu_numa_node());
     assert(signals != nullptr);
     memset(signals, 0, _gpu_buffer_depth * sizeof(hsa_signal_t));
 
     for (int i = 0; i < _gpu_buffer_depth; ++i) {
-        hsa_signal_create(0, 0, NULL, &signals[i]);
+        hsa_signal_create(0, 0, nullptr, &signals[i]);
     }
 
     // Not everyone needs this, maybe move out of constructor
-    kernel_args = (void**)hsa_host_malloc(_gpu_buffer_depth * sizeof(void*));
+    kernel_args =
+        (void**)hsa_host_malloc(_gpu_buffer_depth * sizeof(void*), device.get_gpu_numa_node());
     assert(kernel_args != nullptr);
 
     // Load the kernel if there is one.
@@ -51,10 +69,10 @@ hsaCommand::~hsaCommand() {
     for (int i = 0; i < _gpu_buffer_depth; ++i) {
         // DEBUG("Free kernel arg");
         hsa_status = hsa_memory_free(kernel_args[i]);
-        assert(hsa_status == HSA_STATUS_SUCCESS);
+        HSA_CHECK(hsa_status);
         // DEBUG("Free signal");
         hsa_status = hsa_signal_destroy(signals[i]);
-        assert(hsa_status == HSA_STATUS_SUCCESS);
+        HSA_CHECK(hsa_status);
     }
 
     // DEBUG("Free kernel args");
@@ -70,7 +88,7 @@ void hsaCommand::allocate_kernel_arg_memory(int max_size) {
     for (int i = 0; i < _gpu_buffer_depth; ++i) {
 
         hsa_status = hsa_memory_allocate(device.get_kernarg_region(), max_size, &kernel_args[i]);
-        assert(hsa_status == HSA_STATUS_SUCCESS);
+        HSA_CHECK(hsa_status);
     }
 }
 
@@ -84,32 +102,38 @@ void hsaCommand::finalize_frame(int frame_id) {
         return;
     }
 
+    if (!profiling)
+        return;
+
     if (command_type == gpuCommandType::KERNEL) {
         hsa_status = hsa_amd_profiling_get_dispatch_time(device.get_gpu_agent(), signals[frame_id],
                                                          &kernel_time);
-        last_gpu_execution_time =
+        HSA_CHECK(hsa_status);
+        // Store the kernel run time and utilization
+        double active_time =
             ((double)(kernel_time.end - kernel_time.start)) / (double)timestamp_frequency_hz;
+        excute_time->add_sample(active_time);
+        utilization->add_sample(active_time / frame_arrival_period);
     } else if (command_type == gpuCommandType::COPY_IN
                || command_type == gpuCommandType::COPY_OUT) {
         hsa_status = hsa_amd_profiling_get_async_copy_time(signals[frame_id], &copy_time);
-        last_gpu_execution_time =
+        HSA_CHECK(hsa_status);
+        // Store the copy time and utilization
+        double active_time =
             ((double)(copy_time.end - copy_time.start)) / (double)timestamp_frequency_hz;
+        excute_time->add_sample(active_time);
+        utilization->add_sample(active_time / frame_arrival_period);
     } else {
         return;
     }
-
-    // TODO Common HSA status handler is needed.
-    if (hsa_status != HSA_STATUS_SUCCESS) {
-        throw std::runtime_error("HSA Profiling call failed");
-    }
 }
 
-uint64_t hsaCommand::load_hsaco_file(string& file_name, string& kernel_name) {
+uint64_t hsaCommand::load_hsaco_file(string& file_name, std::string& kernel_name) {
 
     hsa_status_t hsa_status;
 
     // Open file.
-    INFO("Loading %s %s", file_name.c_str(), kernel_name.c_str());
+    INFO("Loading {:s} {:s}", file_name, kernel_name);
     std::ifstream file(file_name, std::ios::in | std::ios::binary);
     assert(file.is_open() && file.good());
 
@@ -130,49 +154,47 @@ uint64_t hsaCommand::load_hsaco_file(string& file_name, string& kernel_name) {
 
     // Deserialize code object.
     hsa_code_object_t code_object = {0};
-    hsa_status =
-        hsa_code_object_deserialize((void*)raw_code_object, code_object_size, NULL, &code_object);
-    assert(HSA_STATUS_SUCCESS == hsa_status);
+    hsa_status = hsa_code_object_deserialize((void*)raw_code_object, code_object_size, nullptr,
+                                             &code_object);
+    HSA_CHECK(hsa_status);
     assert(0 != code_object.handle);
 
     // Create executable.
     hsa_executable_t hsaExecutable;
-    hsa_status = hsa_executable_create(HSA_PROFILE_FULL, HSA_EXECUTABLE_STATE_UNFROZEN, NULL,
+    hsa_status = hsa_executable_create(HSA_PROFILE_FULL, HSA_EXECUTABLE_STATE_UNFROZEN, nullptr,
                                        &hsaExecutable);
-    assert(HSA_STATUS_SUCCESS == hsa_status);
+    HSA_CHECK(hsa_status);
 
     // Load code object.
-    hsa_status =
-        hsa_executable_load_code_object(hsaExecutable, device.get_gpu_agent(), code_object, NULL);
-    assert(HSA_STATUS_SUCCESS == hsa_status);
+    hsa_status = hsa_executable_load_code_object(hsaExecutable, device.get_gpu_agent(), code_object,
+                                                 nullptr);
+    HSA_CHECK(hsa_status);
 
     // Freeze executable.
-    hsa_status = hsa_executable_freeze(hsaExecutable, NULL);
-    assert(HSA_STATUS_SUCCESS == hsa_status);
+    hsa_status = hsa_executable_freeze(hsaExecutable, nullptr);
+    HSA_CHECK(hsa_status);
 
     // Get symbol handle.
     hsa_executable_symbol_t kernelSymbol;
-    hsa_status = hsa_executable_get_symbol(hsaExecutable, NULL, kernel_name.c_str(),
+    hsa_status = hsa_executable_get_symbol(hsaExecutable, nullptr, kernel_name.c_str(),
                                            device.get_gpu_agent(), 0, &kernelSymbol);
-    assert(HSA_STATUS_SUCCESS == hsa_status);
+    HSA_CHECK(hsa_status);
 
     // Get code handle.
     uint64_t codeHandle;
     hsa_status = hsa_executable_symbol_get_info(
         kernelSymbol, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_OBJECT, &codeHandle);
-    assert(HSA_STATUS_SUCCESS == hsa_status);
+    HSA_CHECK(hsa_status);
 
     uint32_t group_segment_size;
     hsa_status = hsa_executable_symbol_get_info(
         kernelSymbol, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_GROUP_SEGMENT_SIZE, &group_segment_size);
-    INFO("Kernel %s:%s group_segment_size %i", file_name.c_str(), kernel_name.c_str(),
-         group_segment_size);
+    INFO("Kernel {:s}:{:s} group_segment_size {:d}", file_name, kernel_name, group_segment_size);
 
     uint32_t priv_segment_size;
     hsa_status = hsa_executable_symbol_get_info(
         kernelSymbol, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_PRIVATE_SEGMENT_SIZE, &priv_segment_size);
-    INFO("Kernel %s:%s group_segment_size %i", file_name.c_str(), kernel_name.c_str(),
-         priv_segment_size);
+    INFO("Kernel {:s}:{:s} group_segment_size {:d}", file_name, kernel_name, priv_segment_size);
 
     // Free raw code object memory.
     free((void*)raw_code_object);

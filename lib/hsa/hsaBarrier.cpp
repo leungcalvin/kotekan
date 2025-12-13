@@ -1,15 +1,19 @@
 #include "hsaBarrier.hpp"
 
-#include <unistd.h>
+#include "gpuCommand.hpp"         // for gpuCommandType, gpuCommandType::BARRIER
+#include "hsaDeviceInterface.hpp" // for hsaDeviceInterface
+
+#include <stdint.h> // for uint32_t, uint8_t, uint64_t
+#include <string.h> // for memset
 
 using kotekan::bufferContainer;
 using kotekan::Config;
 
 REGISTER_HSA_COMMAND(hsaBarrier);
 
-hsaBarrier::hsaBarrier(Config& config, const string& unique_name, bufferContainer& host_buffers,
-                       hsaDeviceInterface& device) :
-    hsaCommand(config, unique_name, host_buffers, device, "", "") {
+hsaBarrier::hsaBarrier(Config& config, const std::string& unique_name,
+                       bufferContainer& host_buffers, hsaDeviceInterface& device) :
+    hsaCommand(config, unique_name, host_buffers, device, "hsaBarrier", "") {
     command_type = gpuCommandType::BARRIER;
 }
 
@@ -32,7 +36,7 @@ hsa_signal_t hsaBarrier::execute(int gpu_frame_id, hsa_signal_t precede_signal) 
     hsa_barrier_and_packet_t* barrier_and_packet =
         (hsa_barrier_and_packet_t*)device.get_queue()->base_address
         + (index % device.get_queue()->size);
-    // INFO("hsaBarrier got write index: %" PRIu64 ", packet_address: %p, precede_signal: %lu",
+    // INFO("hsaBarrier got write index: {:d}, packet_address: {:p}, precede_signal: {:d}",
     // index, barrier_and_packet, precede_signal.handle);
 
     // Set the packet details, including the preceded signal to wait on.

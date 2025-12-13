@@ -5,13 +5,17 @@
 #define SIM_FULL_RANGE 1
 #define SIM_SINE 2
 
-#include "Stage.hpp"
-#include "buffer.h"
-#include "errors.h"
+#include "Config.hpp"          // for Config
+#include "Stage.hpp"           // for Stage
+#include "Telescope.hpp"       // for stream_t
+#include "bufferContainer.hpp" // for bufferContainer
+
+#include <stdint.h> // for int32_t
+#include <string>   // for string
 
 class networkOutputSim : public kotekan::Stage {
 public:
-    networkOutputSim(kotekan::Config& config, const string& unique_name,
+    networkOutputSim(kotekan::Config& config, const std::string& unique_name,
                      kotekan::bufferContainer& buffer_container);
     virtual ~networkOutputSim();
     void main_thread() override;
@@ -21,7 +25,7 @@ private:
     int num_links_in_group;
     int link_id;
     int pattern;
-    int stream_id;
+    stream_t stream_id;
 
     // Config variables.
     int32_t _samples_per_data_set;

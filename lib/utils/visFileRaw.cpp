@@ -1,27 +1,27 @@
 
 #include "visFileRaw.hpp"
 
-#include "datasetManager.hpp"
-#include "datasetState.hpp"
-#include "errors.h"
-#include "visCompression.hpp"
+#include "Hash.hpp"           // for Hash
+#include "datasetManager.hpp" // for datasetManager, dset_id_t
+#include "datasetState.hpp"   // for stackState, eigenvalueState, freqState, gatingState, input...
+#include "visBuffer.hpp"      // for VisFrameView, VisMetadata
 
-#include "json.hpp"
+#include "fmt.hpp"  // for format, fmt
+#include "json.hpp" // for basic_json<>::object_t, basic_json<>::value_type, json
 
-#include <cstdio>
-#include <cxxabi.h>
-#include <errno.h>
-#include <exception>
-#include <fmt.hpp>
-#include <fstream>
-#include <future>
-#include <inttypes.h>
-#include <numeric>
-#include <stdexcept>
-#include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <utility>
+#include <cstdio>       // for remove
+#include <cxxabi.h>     // for __forced_unwind
+#include <errno.h>      // for errno
+#include <exception>    // for exception
+#include <fcntl.h>      // for fallocate, sync_file_range, open, posix_fadvise, FALLOC_FL...
+#include <fstream>      // for ofstream, basic_ostream::write, ios
+#include <future>       // for async, future
+#include <stdexcept>    // for out_of_range, runtime_error
+#include <string.h>     // for strerror
+#include <sys/stat.h>   // for S_IRGRP, S_IROTH, S_IRUSR, S_IWGRP, S_IWUSR
+#include <system_error> // for system_error
+#include <unistd.h>     // for close, pwrite, TEMP_FAILURE_RETRY
+#include <utility>      // for pair
 
 
 // Register the raw file writer
@@ -30,10 +30,13 @@ REGISTER_VIS_FILE("raw", visFileRaw);
 //
 // Implementation of raw visibility data file
 //
-void visFileRaw::create_file(const std::string& name,
-                             const std::map<std::string, std::string>& metadata, dset_id_t dataset,
-                             size_t max_time) {
-    INFO("Creating new output file %s", name.c_str());
+visFileRaw::visFileRaw(const std::string& name, const kotekan::logLevel log_level,
+                       const std::map<std::string, std::string>& metadata, dset_id_t dataset,
+                       size_t max_time, int oflags) :
+    _name(name) {
+    set_log_level(log_level);
+
+    INFO("Creating new output file {:s}", name);
 
     // Get properties of stream from datasetManager
     auto& dm = datasetManager::instance();
@@ -49,10 +52,9 @@ void visFileRaw::create_file(const std::string& name,
     const freqState* fstate = fstate_fut.get();
 
     if (!istate || !pstate || !fstate) {
-        ERROR("Required datasetState not found for dataset ID "
-              "0x%" PRIx64 "\nThe following required states were found:\n"
-              "inputState - %d\nprodState - %d\nfreqState - %d\n",
-              dataset, istate, pstate, fstate);
+        ERROR("Required datasetState not found for dataset ID {}\nThe following required states "
+              "were found:\ninputState - {:p}\nprodState - {:p}\nfreqState - {:p}\n",
+              dataset, (void*)istate, (void*)pstate, (void*)fstate);
         throw std::runtime_error("Could not create file.");
     }
 
@@ -94,9 +96,9 @@ void visFileRaw::create_file(const std::string& name,
     alignment = 4; // Align on page boundaries
 
     // Calculate the file structure
-    auto layout = visFrameView::calculate_buffer_layout(ninput, nvis, num_ev);
-    data_size = layout.first;
-    metadata_size = sizeof(visMetadata);
+    data_size = VisFrameView::calculate_frame_size(ninput, nvis, num_ev);
+
+    metadata_size = sizeof(VisMetadata);
     frame_size = _member_alignment(data_size + metadata_size + 1, alignment * 1024);
 
     // Write the structure into the file for decoding
@@ -107,13 +109,13 @@ void visFileRaw::create_file(const std::string& name,
 
 
     // Create lock file and then open the other files
-    _name = name;
-    lock_filename = create_lockfile(name);
-    metadata_file = std::ofstream(name + ".meta", std::ios::binary);
-    if ((fd = open((name + ".data").c_str(), oflags, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH))
+    lock_filename = create_lockfile(_name);
+    metadata_file = std::ofstream(_name + ".meta", std::ios::binary);
+    if ((fd = open((_name + ".data").c_str(), oflags,
+                   S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH))
         == -1) {
         throw std::runtime_error(
-            fmt::format("Failed to open file {}: {}.", name + ".data", strerror(errno)));
+            fmt::format(fmt("Failed to open file {:s}.data: {:s}."), _name, strerror(errno)));
     }
 
     // Preallocate data file (without increasing the length)
@@ -136,7 +138,7 @@ visFileRaw::~visFileRaw() {
     // Finalize the metadata file
     file_metadata["structure"]["ntime"] = num_time();
     file_metadata["index_map"]["time"] = times;
-    std::vector<uint8_t> t = json::to_msgpack(file_metadata);
+    std::vector<uint8_t> t = nlohmann::json::to_msgpack(file_metadata);
     metadata_file.write((const char*)&t[0], t.size());
     metadata_file.close();
 
@@ -210,21 +212,23 @@ bool visFileRaw::write_raw(off_t offset, size_t nb, const void* data) {
     int nbytes = TEMP_FAILURE_RETRY(pwrite(fd, data, nb, offset));
 
     if (nbytes < 0) {
-        ERROR("Write error attempting to write %i bytes at offset %llu into file %s: %s", nb,
-              offset, _name.c_str(), strerror(errno));
+        ERROR("Write error attempting to write {:d} bytes at offset {:d} into file {:s}: {:s}", nb,
+              offset, _name, strerror(errno));
         return false;
     }
 
     return true;
 }
 
-void visFileRaw::write_sample(uint32_t time_ind, uint32_t freq_ind, const visFrameView& frame) {
+void visFileRaw::write_sample(uint32_t time_ind, uint32_t freq_ind, const FrameView& frame_view) {
+
+    const VisFrameView& frame = static_cast<const VisFrameView&>(frame_view);
+
     // TODO: consider adding checks for all dims
     if (frame.num_ev != num_ev) {
-        std::string msg =
-            fmt::format("Number of eigenvalues don't match for write (got {}, expected {})",
-                        frame.num_ev, num_ev);
-        throw std::runtime_error(msg);
+        throw std::runtime_error(fmt::format(fmt("Number of eigenvalues don't match for write (got "
+                                                 "{:d}, expected {:d})"),
+                                             frame.num_ev, num_ev));
     }
 
     const uint8_t ONE = 1;

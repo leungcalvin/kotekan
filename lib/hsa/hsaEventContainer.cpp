@@ -1,8 +1,8 @@
 #include "hsaEventContainer.hpp"
 
-#include "errors.h"
+#include "kotekanLogging.hpp" // for ERROR_NON_OO
 
-#include <unistd.h>
+#include <stdint.h> // for UINT64_MAX
 
 
 void hsaEventContainer::set(void* sig) {
@@ -14,7 +14,7 @@ void* hsaEventContainer::get() {
 }
 
 void hsaEventContainer::unset() {
-    // signal = 0;//*(hsa_signal_t*)NULL;
+    // signal = 0;//*(hsa_signal_t*)nullptr;
 }
 
 void hsaEventContainer::wait() {
@@ -22,6 +22,6 @@ void hsaEventContainer::wait() {
     if (hsa_signal_wait_scacquire(signal, HSA_SIGNAL_CONDITION_LT, 1, UINT64_MAX,
                                   HSA_WAIT_STATE_BLOCKED)
         != 0) {
-        ERROR("***** ERROR **** Unexpected signal value **** ERROR **** ");
+        ERROR_NON_OO("***** ERROR **** Unexpected signal value **** ERROR **** ");
     }
 }

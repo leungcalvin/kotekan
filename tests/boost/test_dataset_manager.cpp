@@ -1,17 +1,28 @@
 #define BOOST_TEST_MODULE "test_datasetManager"
 
-#include "Config.hpp"
-#include "test_utils.hpp"
-#include "visUtil.hpp"
+#include "Config.hpp"         // for Config
+#include "Hash.hpp"           // for operator<<
+#include "dataset.hpp"        // for dataset
+#include "datasetManager.hpp" // for state_id_t, datasetManager, dset_id_t
+#include "datasetState.hpp"   // for inputState, prodState, freqState, datasetState
+#include "errors.h"           // for _global_log_level, __enable_syslog
+#include "test_utils.hpp"     // for CompareCTypes
+#include "visUtil.hpp"        // for input_ctype, prod_ctype, freq_ctype
 
-#include "json.hpp"
+#include "json.hpp" // for basic_json<>::object_t, basic_json<>::value...
 
-#include <boost/test/included/unit_test.hpp>
-#include <iostream>
-#include <string>
+#include <algorithm>                         // for max
+#include <boost/test/included/unit_test.hpp> // for BOOST_PP_IIF_1, BOOST_PP_IIF_0, BOOST_PP_BO...
+#include <exception>                         // for exception
+#include <iostream>                          // for endl, operator<<, ostream, basic_ostream, cout
+#include <map>                               // for map
+#include <memory>                            // for allocator, make_unique, unique_ptr
+#include <stdexcept>                         // for out_of_range
+#include <stdint.h>                          // for uint32_t
+#include <string>                            // for string, operator<<, string_literals
+#include <utility>                           // for pair
+#include <vector>                            // for vector
 
-// the code to test:
-#include "datasetManager.hpp"
 
 using kotekan::Config;
 
@@ -19,9 +30,12 @@ using json = nlohmann::json;
 
 using namespace std::string_literals;
 
+// The datasetManager uses the restServer, but it's not started by this test.
+// That leads to a warnings message from the restServer on exit we can ignore.
+
 
 BOOST_FIXTURE_TEST_CASE(_general, CompareCTypes) {
-    __log_level = 5;
+    _global_log_level = 5;
     __enable_syslog = 0;
     json json_config;
     json json_config_dm;
@@ -36,17 +50,22 @@ BOOST_FIXTURE_TEST_CASE(_general, CompareCTypes) {
     std::vector<prod_ctype> prods = {{1, 1}, {2, 2}, {3, 3}};
     std::vector<std::pair<uint32_t, freq_ctype>> freqs = {
         {1, {1.1, 1}}, {2, {2, 2.2}}, {3, {3, 3}}};
-    std::pair<state_id_t, const inputState*> input_state =
-        dm.add_state(std::make_unique<inputState>(
-            inputs, std::make_unique<prodState>(prods, std::make_unique<freqState>(freqs))));
-    dset_id_t init_ds_id = dm.add_dataset(input_state.first);
+
+    std::vector<state_id_t> states1;
+    states1.push_back(dm.create_state<freqState>(freqs).first);
+    states1.push_back(dm.create_state<prodState>(prods).first);
+    states1.push_back(dm.create_state<inputState>(inputs).first);
+    dset_id_t init_ds_id = dm.add_dataset(states1);
+
     inputs = {input_ctype(1, "1"), input_ctype(2, "2")};
     prods = {{1, 1}, {2, 2}};
     freqs = {{1, {1.1, 1}}, {2, {2, 2.2}}};
-    std::pair<state_id_t, const inputState*> input_state2 =
-        dm.add_state(std::make_unique<inputState>(
-            inputs, std::make_unique<prodState>(prods, std::make_unique<freqState>(freqs))));
-    dset_id_t init_ds_id2 = dm.add_dataset(init_ds_id, input_state2.first);
+
+    std::vector<state_id_t> states2;
+    states2.push_back(dm.create_state<freqState>(freqs).first);
+    states2.push_back(dm.create_state<prodState>(prods).first);
+    states2.push_back(dm.create_state<inputState>(inputs).first);
+    dset_id_t init_ds_id2 = dm.add_dataset(states2, init_ds_id);
 
 
     // transform that data:
@@ -69,12 +88,11 @@ BOOST_FIXTURE_TEST_CASE(_general, CompareCTypes) {
     const std::vector<std::pair<uint32_t, freq_ctype>>& old_freqs = old_state3->get_freqs();
     check_equal(old_freqs, freqs);
 
-    std::pair<state_id_t, const inputState*> transformed_input_state =
-        dm.add_state(std::make_unique<inputState>(
-            new_inputs,
-            std::make_unique<prodState>(new_prods, std::make_unique<freqState>(new_freqs))));
-    dset_id_t transformed_ds_id = dm.add_dataset(init_ds_id2, transformed_input_state.first);
-
+    std::vector<state_id_t> transformed_states;
+    transformed_states.push_back(dm.create_state<freqState>(new_freqs).first);
+    transformed_states.push_back(dm.create_state<prodState>(new_prods).first);
+    transformed_states.push_back(dm.create_state<inputState>(new_inputs).first);
+    dset_id_t transformed_ds_id = dm.add_dataset(transformed_states, init_ds_id2);
 
     // get state
     const inputState* final_state = dm.dataset_state<inputState>(transformed_ds_id);
@@ -91,7 +109,7 @@ BOOST_FIXTURE_TEST_CASE(_general, CompareCTypes) {
 }
 
 BOOST_AUTO_TEST_CASE(_serialization_input) {
-    __log_level = 4;
+    _global_log_level = 4;
     json json_config;
     json json_config_dm;
     json_config_dm["use_dataset_broker"] = false;
@@ -107,8 +125,7 @@ BOOST_AUTO_TEST_CASE(_serialization_input) {
     std::vector<std::pair<uint32_t, freq_ctype>> freqs = {
         {1, {1.1, 1}}, {2, {2, 2.2}}, {3, {3, 3}}};
     std::pair<state_id_t, const inputState*> input_state =
-        dm.add_state(std::make_unique<inputState>(
-            inputs, std::make_unique<prodState>(prods, std::make_unique<freqState>(freqs))));
+        dm.add_state(std::make_unique<inputState>(inputs));
     json j = input_state.second->to_json();
     state_uptr s = datasetState::from_json(j);
     json j2 = s->to_json();
@@ -116,8 +133,7 @@ BOOST_AUTO_TEST_CASE(_serialization_input) {
 
     // serialize 2 states with the same data
     std::pair<state_id_t, const inputState*> input_state3 =
-        dm.add_state(std::make_unique<inputState>(
-            inputs, std::make_unique<prodState>(prods, std::make_unique<freqState>(freqs))));
+        dm.add_state(std::make_unique<inputState>(inputs));
     json j3 = input_state3.second->to_json();
     BOOST_CHECK_EQUAL(j, j3);
 
@@ -130,7 +146,7 @@ BOOST_AUTO_TEST_CASE(_serialization_input) {
 }
 
 BOOST_AUTO_TEST_CASE(_serialization_prod) {
-    __log_level = 4;
+    _global_log_level = 4;
     json json_config;
     json json_config_dm;
     json_config_dm["use_dataset_broker"] = false;
@@ -163,7 +179,7 @@ BOOST_AUTO_TEST_CASE(_serialization_prod) {
 }
 
 BOOST_AUTO_TEST_CASE(_serialization_freq) {
-    __log_level = 4;
+    _global_log_level = 4;
     json json_config;
     json json_config_dm;
     json_config_dm["use_dataset_broker"] = false;
@@ -197,7 +213,7 @@ BOOST_AUTO_TEST_CASE(_serialization_freq) {
 }
 
 BOOST_AUTO_TEST_CASE(_no_state_of_type_found) {
-    __log_level = 4;
+    _global_log_level = 4;
     json json_config;
     json json_config_dm;
     json_config_dm["use_dataset_broker"] = false;
@@ -218,7 +234,7 @@ BOOST_AUTO_TEST_CASE(_no_state_of_type_found) {
 }
 
 BOOST_FIXTURE_TEST_CASE(_equal_states, CompareCTypes) {
-    __log_level = 4;
+    _global_log_level = 4;
     json json_config;
     json json_config_dm;
     json_config_dm["use_dataset_broker"] = false;

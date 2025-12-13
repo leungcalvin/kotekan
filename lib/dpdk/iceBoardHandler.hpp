@@ -7,9 +7,12 @@
 #ifndef ICE_BOARD_HANDLER_HPP
 #define ICE_BOARD_HANDLER_HPP
 
+#include "Config.hpp"
+#include "ICETelescope.hpp"
+#include "Telescope.hpp"
 #include "dpdkCore.hpp"
-#include "fpga_header_functions.h"
 #include "prometheusMetrics.hpp"
+#include "util.h" // for e_time
 
 #include "json.hpp"
 
@@ -22,14 +25,17 @@
  * This needs to be subclassed to actualy do something with the packets, it
  * just provides a common set of functions that are needed for ICEBoard packets
  *
- * @config   alignment         UInt. Align each output frame of data to this FPGA seq number edge.
+ * @conf   alignment         UInt. Align each output frame of data to this FPGA seq number edge.
  *                                   Note it could be larger than the output frame size
  *                                   (in number of FPGA samples) but must be a multiple of that.
- * @config   sample_size       Int.  Default 2048. Size of a time samples (unlikely to change)
- * @config   fpga_packet_size  Int.  Default 4928. Full size of the FPGA packet, including Ethernet,
- *                                                IP, UDP, and FPGA frame headers, FPGA data
- * payload, FPGA footer flags, and any padding (but not the Ethernet CRC).
- * @config   samples_per_packet Int. Default 2.   The number of time samples per FPGA packet
+ * @conf   sample_size       Int.  Default 2048. Size of a time samples (unlikely to change)
+ * @conf   fpga_packet_size  Int.  Default 4928. Full size of the FPGA packet, including Ethernet,
+ *                                                 IP, UDP, and FPGA frame headers, FPGA data
+ *                                                 payload, FPGA footer flags, and any padding
+ *                                                 (but not the Ethernet CRC).
+ * @conf   samples_per_packet Int. Default 2.    The number of time samples per FPGA packet
+ * @conf   status_cadence    Int  Default 0      The time (in seconds between printing port
+ *                                                 status) Default 0 == don't print.
  *
  * @par Metrics
  * @metric kotekan_dpdk_rx_packets_total
@@ -62,10 +68,10 @@ public:
                     kotekan::bufferContainer& buffer_container, int port);
 
     /// Same abstract function as in @c dpdkRXhandler
-    virtual int handle_packet(struct rte_mbuf* mbuf) = 0;
+    virtual int handle_packet(struct rte_mbuf* mbuf) override = 0;
 
     /// Update common stats, this should be called by subclasses implementing this function as well
-    virtual void update_stats();
+    virtual void update_stats() override;
 
 protected:
     /**
@@ -81,7 +87,8 @@ protected:
      */
     bool align_first_packet(struct rte_mbuf* mbuf) {
         uint64_t seq = iceBoardHandler::get_mbuf_seq_num(mbuf);
-        stream_id_t stream_id = extract_stream_id(iceBoardHandler::get_mbuf_stream_id(mbuf));
+        ice_stream_id_t stream_id =
+            ice_extract_stream_id(iceBoardHandler::get_mbuf_stream_id(mbuf));
 
         // We allow for the fact we might miss the first packet by upto 100 FPGA frames,
         // if this happens then the missing frames at the start of the buffer frame are filled
@@ -92,14 +99,13 @@ protected:
             cur_seq = seq;
             port_stream_id = stream_id;
 
-            INFO("Port %d; Got StreamID: crate: %d, slot: %d, link: %d, unused: %d, start seq num: "
-                 "%" PRIu64 " current seq num: %" PRIu64 "",
+            INFO("Port {:d}; Got StreamID: crate: {:d}, slot: {:d}, link: {:d}, unused: {:d}, "
+                 "start seq num: {:d} current seq num: {:d}",
                  port, stream_id.crate_id, stream_id.slot_id, stream_id.link_id, stream_id.unused,
                  last_seq, seq);
 
             if (!check_cross_handler_alignment(last_seq)) {
-                ERROR("DPDK failed to align packets between handlers, closing kotekan!");
-                raise(SIGINT);
+                FATAL_ERROR("DPDK failed to align packets between handlers, closing kotekan!");
                 return false;
             }
 
@@ -114,8 +120,8 @@ protected:
     /**
      * @brief Gets the FPGA seq number from the given packet
      *
-     * @param cur_mbuf The rte_mbuf containing the packet
-     * @return uint64_t The FPGA seq number
+     * @param  cur_mbuf  The rte_mbuf containing the packet
+     * @return           The FPGA seq number
      */
     inline uint64_t get_mbuf_seq_num(struct rte_mbuf* cur_mbuf) {
         return (uint64_t)(*(uint32_t*)(rte_pktmbuf_mtod(cur_mbuf, char*) + 54))
@@ -126,11 +132,11 @@ protected:
     /**
      * @brief Gets the FPGA stream ID from the given packet
      *
-     * @param cur_mbuf The rte_mbuf containing the packet
-     * @return uint16_t The encoded streamID
+     * @param  cur_mbuf  The rte_mbuf containing the packet
+     * @return           The encoded streamID
      */
-    inline uint16_t get_mbuf_stream_id(struct rte_mbuf* cur_mbuf) {
-        return *(uint16_t*)(rte_pktmbuf_mtod(cur_mbuf, char*) + 44);
+    inline stream_t get_mbuf_stream_id(struct rte_mbuf* cur_mbuf) {
+        return {*(uint16_t*)(rte_pktmbuf_mtod(cur_mbuf, char*) + 44)};
     }
 
     /**
@@ -147,19 +153,17 @@ protected:
      */
     inline bool check_packet(struct rte_mbuf* cur_mbuf) {
         if (unlikely((cur_mbuf->ol_flags | PKT_RX_IP_CKSUM_BAD) == 1)) {
-            WARN("dpdk: Got bad packet checksum on port %d", port);
+            WARN("dpdk: Got bad packet checksum on port {:d}", port);
             rx_ip_cksum_errors_total += 1;
             rx_errors_total += 1;
             return false;
         }
         if (unlikely(fpga_packet_size != cur_mbuf->pkt_len)) {
-            ERROR("Got packet with incorrect length: %d, expected %d", cur_mbuf->pkt_len,
+
+            // Checks the packet size matches the expected FPGA packet size.
+            ERROR("Got packet with incorrect length: {:d}, expected {:d}", cur_mbuf->pkt_len,
                   fpga_packet_size);
 
-            // Getting a packet with the wrong length is almost always
-            // a configuration/FPGA problem that needs to be addressed.
-            // So for now we just exit kotekan with an error message.
-            raise(SIGINT);
 
             rx_packet_len_errors_total += 1;
             rx_errors_total += 1;
@@ -184,9 +188,8 @@ protected:
      */
     inline bool check_order(int64_t diff) {
         if (unlikely(diff < 0)) {
-            WARN("Port: %d; Diff %" PRId64
-                 " less than zero, duplicate, bad, or out-of-order packet; last %" PRIu64
-                 "; cur: %" PRIu64 "",
+            WARN("Port: {:d}; Diff {:d} less than zero, duplicate, bad, or out-of-order packet; "
+                 "last {:d}; cur: {:d}",
                  port, diff, last_seq, cur_seq);
             rx_out_of_order_errors_total += 1;
             rx_errors_total += 1;
@@ -208,9 +211,9 @@ protected:
      */
     inline bool check_for_reset(int64_t diff) {
         if (unlikely(diff < -1000)) {
-            ERROR("The FPGAs likely reset, kotekan stopping... (FPGA seq number was less than 1000 "
-                  "of highest number seen.)");
-            raise(SIGINT);
+            FATAL_ERROR(
+                "The FPGAs likely reset, kotekan stopping... (FPGA seq number was less than 1000 "
+                "of highest number seen.)");
             return false;
         }
         return true;
@@ -224,7 +227,7 @@ protected:
      * @return int64_t The difference between the current FPGA seq number and the last one seen
      */
     inline int64_t get_packet_diff() {
-        // Since the seq number is actually an unsigned 48-bit numdber, this cast will always be
+        // Since the seq number is actually an unsigned 48-bit number, this cast will always be
         // safe.
         return (int64_t)cur_seq - (int64_t)last_seq;
     }
@@ -254,14 +257,14 @@ protected:
         // getting packets.
         if (seq_num == std::numeric_limits<uint64_t>::max()) {
             alignment_first_seq = std::numeric_limits<uint64_t>::max();
-            DEBUG("Setting alignment value to MAX=%" PRIu64 "", alignment_first_seq);
+            DEBUG("Setting alignment value to MAX={:d}", alignment_first_seq);
             return true;
         }
 
         // This case deals with the first handler setting it's seq number.
         if (seq_num != alignment_first_seq
             && alignment_first_seq == std::numeric_limits<uint64_t>::max()) {
-            DEBUG("Port %d: Got first alignemnt value of %" PRIu64 "", port, seq_num);
+            DEBUG("Port {:d}: Got first alignemnt value of {:d}", port, seq_num);
             alignment_first_seq = seq_num;
             return true;
         }
@@ -269,13 +272,13 @@ protected:
         // This case deals with each addational handler checking if it has the same
         // first seq number.
         if (seq_num != alignment_first_seq) {
-            ERROR("Port %d: Got alignemnt value of %" PRIu64 ", but expected %" PRIu64 "", port,
-                  seq_num, alignment_first_seq);
+            ERROR("Port {:d}: Got alignemnt value of {:d}, but expected {:d}", port, seq_num,
+                  alignment_first_seq);
             return false;
         }
 
-        // Addational handler(s) got the same first seq number.
-        DEBUG("Port %d: Got alignemnt value of %" PRIu64 "", port, seq_num);
+        // Additional handler(s) got the same first seq number.
+        DEBUG("Port {:d}: Got alignemnt value of {:d}", port, seq_num);
         return true;
     }
 
@@ -284,7 +287,7 @@ protected:
      *
      * @return The json object containing port info
      */
-    json get_json_port_info();
+    nlohmann::json get_json_port_info();
 
     /// The FPAG seq number of the current packet being processed
     uint64_t cur_seq = 0;
@@ -294,7 +297,7 @@ protected:
 
     /// The streamID seen by this port handler
     /// Values of 255 = unset
-    stream_id_t port_stream_id = {255, 255, 255, 255};
+    ice_stream_id_t port_stream_id = {255, 255, 255, 255};
 
     /// Set to true after the first packet is alligned.
     bool got_first_packet = false;
@@ -326,11 +329,52 @@ protected:
 
     /// The number of frequences in the output stream
     int32_t num_local_freq;
+
+    /// Prometheus metrics
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_packets_total_metric;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_samples_total_metric;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_lost_packets_total_metric;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& lost_samples_total_metric;
+
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_bytes_total_metric;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_errors_total_metric;
+
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_ip_cksum_errors_total_metric;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>&
+        rx_packet_len_errors_total_metric;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>&
+        rx_out_of_order_errors_total_metric;
+
+private:
+    // Last time we've printed a status message
+    double last_status_message_time;
+
+    // Timing between status messages
+    uint32_t status_cadence;
 };
 
 inline iceBoardHandler::iceBoardHandler(kotekan::Config& config, const std::string& unique_name,
                                         kotekan::bufferContainer& buffer_container, int port) :
-    dpdkRXhandler(config, unique_name, buffer_container, port) {
+    dpdkRXhandler(config, unique_name, buffer_container, port),
+    rx_packets_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_packets_total", unique_name, {"port"})),
+    rx_samples_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_samples_total", unique_name, {"port"})),
+    rx_lost_packets_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_lost_packets_total", unique_name, {"port"})),
+    lost_samples_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_lost_samples_total", unique_name, {"port"})),
+    rx_bytes_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_bytes_total", unique_name, {"port"})),
+    rx_errors_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_errors_total", unique_name, {"port"})),
+
+    rx_ip_cksum_errors_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_ip_cksum_errors_total", unique_name, {"port"})),
+    rx_packet_len_errors_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_packet_len_errors_total", unique_name, {"port"})),
+    rx_out_of_order_errors_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_out_of_order_errors_total", unique_name, {"port"})) {
 
     sample_size = config.get_default<uint32_t>(unique_name, "sample_size", 2048);
     fpga_packet_size = config.get_default<uint32_t>(unique_name, "fpga_packet_size", 4928);
@@ -340,16 +384,24 @@ inline iceBoardHandler::iceBoardHandler(kotekan::Config& config, const std::stri
     alignment = config.get<uint64_t>(unique_name, "alignment");
 
     check_cross_handler_alignment(std::numeric_limits<uint64_t>::max());
+
+    // Don't print anything for the first 30 seconds
+    last_status_message_time = e_time() + 30;
+    status_cadence = config.get_default<uint32_t>(unique_name, "status_cadence", 0);
 }
 
-json iceBoardHandler::get_json_port_info() {
-    json info;
+nlohmann::json iceBoardHandler::get_json_port_info() {
+    nlohmann::json info;
 
     info["fpga_stream_id"] = {{"crate", port_stream_id.crate_id},
                               {"slot", port_stream_id.slot_id},
                               {"link", port_stream_id.link_id}};
     info["lost_packets"] = rx_lost_samples_total / samples_per_packet;
     info["lost_samples"] = rx_lost_samples_total;
+
+    info["rx_packets_total"] = rx_packets_total;
+    info["rx_samples_total"] = rx_packets_total;
+    info["rx_bytes_total"] = rx_bytes_total;
 
     info["ip_cksum_errors"] = rx_ip_cksum_errors_total;
     info["out_of_order_errors"] = rx_out_of_order_errors_total;
@@ -360,36 +412,28 @@ json iceBoardHandler::get_json_port_info() {
 
     info["nic_port"] = this->port;
 
-    vector<uint32_t> freq_bins;
-    vector<float> freq_mhz;
-    stream_id_t temp_stream_id = port_stream_id;
+    std::vector<uint32_t> freq_bins;
+    std::vector<float> freq_mhz;
+    ice_stream_id_t temp_stream_id = port_stream_id;
     temp_stream_id.crate_id = port_stream_id.crate_id % 2;
+
+    auto& tel = Telescope::instance();
+
+    // TODO: this could probably be refactored now we have the Telescope object...
+    const int num_shuffle_freq = (num_local_freq == 1 ? 4 : 1);
+
     for (int32_t i = 0; i < num_local_freq; ++i) {
-        if (port_stream_id.crate_id == 255) {
-            // This is the error case where the stream ID hasn't been set yet.
-            if (num_local_freq == 1) {
-                for (int j = 0; j < 4; ++j) {
-                    freq_bins.push_back(std::numeric_limits<uint32_t>::max());
-                    freq_mhz.push_back(0);
-                }
-            } else {
+        for (int j = 0; j < num_shuffle_freq; ++j) {
+            if (port_stream_id.crate_id == 255) {
                 freq_bins.push_back(std::numeric_limits<uint32_t>::max());
                 freq_mhz.push_back(0);
-            }
-        } else if (num_local_freq == 1) { // CHIME
-            // Even though CHIME sets num_local_freq == 1
-            // The packets actually have 4 frequencies and 512 elements before the transpose
-            for (int j = 0; j < 4; ++j) {
+            } else {
                 temp_stream_id.unused = j;
-                freq_bins.push_back(bin_number_chime(&temp_stream_id));
-                freq_mhz.push_back(freq_from_bin(bin_number_chime(&temp_stream_id)));
+                stream_t encoded_id = ice_encode_stream_id(temp_stream_id);
+
+                freq_bins.push_back(tel.to_freq_id(encoded_id, i));
+                freq_mhz.push_back(tel.to_freq(encoded_id, i));
             }
-        } else if (num_local_freq == 8) { // 256 element system (Pathfinder)
-            freq_bins.push_back(bin_number(&temp_stream_id, i));
-            freq_mhz.push_back(freq_from_bin(bin_number(&temp_stream_id, i)));
-        } else if (num_local_freq == 128) { // 16 element system
-            freq_bins.push_back(bin_number_16_elem(&temp_stream_id, i));
-            freq_mhz.push_back(freq_from_bin(bin_number_16_elem(&temp_stream_id, i)));
         }
     }
 
@@ -400,28 +444,30 @@ json iceBoardHandler::get_json_port_info() {
 }
 
 inline void iceBoardHandler::update_stats() {
-    kotekan::prometheusMetrics& metrics = kotekan::prometheusMetrics::instance();
 
-    std::string tags = "port=\"" + std::to_string(port) + "\"";
+    std::vector<std::string> port_label = {std::to_string(port)};
 
-    metrics.add_stage_metric("kotekan_dpdk_rx_packets_total", unique_name, rx_packets_total, tags);
-    metrics.add_stage_metric("kotekan_dpdk_rx_samples_total", unique_name,
-                             rx_packets_total * samples_per_packet, tags);
+    rx_packets_total_metric.labels(port_label).set(rx_packets_total);
+    rx_samples_total_metric.labels(port_label).set(rx_packets_total * samples_per_packet);
+    rx_lost_packets_total_metric.labels(port_label)
+        .set((int)(rx_lost_samples_total / samples_per_packet));
+    lost_samples_total_metric.labels(port_label).set(rx_lost_samples_total);
 
-    metrics.add_stage_metric("kotekan_dpdk_rx_lost_packets_total", unique_name,
-                             (int)(rx_lost_samples_total / samples_per_packet), tags);
-    metrics.add_stage_metric("kotekan_dpdk_lost_samples_total", unique_name, rx_lost_samples_total,
-                             tags);
+    rx_bytes_total_metric.labels(port_label).set(rx_bytes_total);
+    rx_errors_total_metric.labels(port_label).set(rx_errors_total);
 
-    metrics.add_stage_metric("kotekan_dpdk_rx_bytes_total", unique_name, rx_bytes_total, tags);
-    metrics.add_stage_metric("kotekan_dpdk_rx_errors_total", unique_name, rx_errors_total, tags);
+    rx_ip_cksum_errors_total_metric.labels(port_label).set(rx_ip_cksum_errors_total);
+    rx_packet_len_errors_total_metric.labels(port_label).set(rx_packet_len_errors_total);
+    rx_out_of_order_errors_total_metric.labels(port_label).set(rx_out_of_order_errors_total);
 
-    metrics.add_stage_metric("kotekan_dpdk_rx_ip_cksum_errors_total", unique_name,
-                             rx_ip_cksum_errors_total, tags);
-    metrics.add_stage_metric("kotekan_dpdk_rx_packet_len_errors_total", unique_name,
-                             rx_packet_len_errors_total, tags);
-    metrics.add_stage_metric("kotekan_dpdk_rx_out_of_order_errors_total", unique_name,
-                             rx_out_of_order_errors_total, tags);
+    double time_now = e_time();
+    if (status_cadence != 0 && (time_now - last_status_message_time) > (double)status_cadence) {
+        INFO("DPDK port {:d}, connected to (crate = {:d}, slot = {:d}, link = {:d}), total "
+             "packets {:d} ",
+             port, port_stream_id.crate_id, port_stream_id.slot_id, port_stream_id.link_id,
+             rx_packets_total);
+        last_status_message_time = time_now;
+    }
 }
 
 #endif

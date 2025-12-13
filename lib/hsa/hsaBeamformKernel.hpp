@@ -7,10 +7,22 @@
 #ifndef HSA_BEAMFORM_KERNEL_H
 #define HSA_BEAMFORM_KERNEL_H
 
-#include "hsaCommand.hpp"
-#include "restServer.hpp"
+#include "Config.hpp" // for Config
+#include "Telescope.hpp"
+#include "buffer.h"               // for Buffer
+#include "bufferContainer.hpp"    // for bufferContainer
+#include "hsa/hsa.h"              // for hsa_signal_t
+#include "hsaCommand.hpp"         // for hsaCommand
+#include "hsaDeviceInterface.hpp" // for hsaDeviceInterface
+#include "restServer.hpp"         // for connectionInstance
 
-#define LIGHT_SPEED 3.e8
+#include "json.hpp" // for json
+
+#include <stdint.h> // for int32_t, uint32_t
+#include <string>   // for string
+#include <vector>   // for vector
+
+#define LIGHT_SPEED 299792458.
 #define FEED_SEP 0.3048
 #define PI 3.14159265
 
@@ -35,11 +47,11 @@
  * @requires_kernel    unpack_shift_beamform_flip.hasco
  *
  * @par REST Endpoints
- * @endpoint    /frb/update_NS_beam/<gpu id> ``POST`` Trigger re-set of
+ * @endpoint    /frb/update_NS_beam/\<gpu id\> ``POST`` Trigger re-set of
  *              FFT beam spacing in N-S
  *              requires json values      northmost_beam
  *              update config             northmost_beam
- * @endpoint    /frb/update_EW_beam/<gpu id> ``POST`` Trigger re-calculate
+ * @endpoint    /frb/update_EW_beam/\<gpu id\> ``POST`` Trigger re-calculate
  *              of phase delay for the 4 E-W brute-force formed beams
  *              requires json values      ew_id, ew_beam
  *              update config             ew_spacing[ew_id]
@@ -87,7 +99,7 @@ class hsaBeamformKernel : public hsaCommand {
 public:
     /// Constructor, also initializes internal variables from config, allocates host_map, host_coeff
     /// and host_gain, get metadata buffer and register endpoint for gain path.
-    hsaBeamformKernel(kotekan::Config& config, const string& unique_name,
+    hsaBeamformKernel(kotekan::Config& config, const std::string& unique_name,
                       kotekan::bufferContainer& host_buffers, hsaDeviceInterface& device);
 
     /// Destructor, cleans up local allocs.
@@ -100,13 +112,10 @@ public:
     /// argument buffer, set kernel dimensions, enqueue kernel
     hsa_signal_t execute(int gpu_frame_id, hsa_signal_t precede_signal) override;
 
-    /// Endpoint for providing new directory path for gain updates
-    bool update_gains_callback(nlohmann::json& json);
     /// Endpoint for setting N-S beam extent
-    void update_NS_beam_callback(kotekan::connectionInstance& conn, json& json_request);
+    void update_NS_beam_callback(kotekan::connectionInstance& conn, nlohmann::json& json_request);
     /// Endpoint for setting E-W beam sky angle
-    void update_EW_beam_callback(kotekan::connectionInstance& conn, json& json_request);
-
+    void update_EW_beam_callback(kotekan::connectionInstance& conn, nlohmann::json& json_request);
 
 private:
     /**
@@ -135,10 +144,6 @@ private:
     int32_t coeff_len;
     /// 2048 elements x 2 for complex
     int32_t gain_len;
-    /// Directory path where gain files are
-    string _gain_dir;
-    /// Default gain values if gain file is missing for this freq, currently set to 1+1j
-    vector<float> default_gains;
 
     /// Buffer for accessing metadata
     Buffer* metadata_buf;
@@ -147,7 +152,7 @@ private:
     /// Metadata buffer precondition ID
     int32_t metadata_buffer_precondition_id;
     /// Freq bin index, where the 0th is at 800MHz
-    int32_t freq_idx;
+    freq_id_t freq_idx;
     /// Freq in MHz
     float freq_MHz;
 
@@ -155,11 +160,6 @@ private:
     uint32_t* host_map;
     /// Array of phase delays for E-W brute force beamform, float of size 32
     float* host_coeff;
-    /// Array of gains, float size of 2048*2
-    float* host_gain;
-
-    /// Scaling factor to be applied on the gains, currently set to 1.0 and somewhat deprecated?
-    float scaling;
 
     /// Number of elements, should be 2048
     uint32_t _num_elements;
@@ -171,14 +171,12 @@ private:
     /// The desired extent (e.g. 90, 60, 45) of the Northmost beam in degree
     float _northmost_beam;
     /// The sky angle of the 4 EW beams in degree
-    vector<float> _ew_spacing;
+    std::vector<float> _ew_spacing;
     float* _ew_spacing_c;
 
     /// The reference freq for calcating beam spacing, a function of the input _northmost_beam
     double freq_ref;
 
-    /// Flag to control gains to be only loaded on request.
-    bool update_gains;
     /// Flag to avoid re-calculating freq-specific params except at first pass
     bool first_pass;
     /// Flag to update NS beam
@@ -191,8 +189,9 @@ private:
     /// Endpoint for updating EW beams
     std::string endpoint_EW_beam;
 
-    /// Config base (@TODO this is a huge hack replace with updatable config)
-    string config_base;
+    /// Config base
+    /// @todo this is a huge hack replace with updatable config
+    std::string config_base;
 };
 
 #endif

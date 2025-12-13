@@ -1,10 +1,15 @@
 #include "hsaRfiBadInput.hpp"
 
-#include "hsaBase.h"
+#include "Config.hpp"             // for Config
+#include "gpuCommand.hpp"         // for gpuCommandType, gpuCommandType::KERNEL
+#include "hsaDeviceInterface.hpp" // for hsaDeviceInterface, Config
+#include "restServer.hpp"         // for HTTP_RESPONSE, connectionInstance, restServer
 
-#include <math.h>
-#include <mutex>
-#include <unistd.h>
+#include <exception> // for exception
+#include <regex>     // for match_results<>::_Base_type
+#include <stdexcept> // for runtime_error
+#include <string.h>  // for memcpy, memset
+#include <vector>    // for vector
 
 using kotekan::bufferContainer;
 using kotekan::Config;
@@ -15,9 +20,10 @@ using kotekan::restServer;
 
 REGISTER_HSA_COMMAND(hsaRfiBadInput);
 
-hsaRfiBadInput::hsaRfiBadInput(Config& config, const string& unique_name,
+hsaRfiBadInput::hsaRfiBadInput(Config& config, const std::string& unique_name,
                                bufferContainer& host_buffers, hsaDeviceInterface& device) :
-    hsaCommand(config, unique_name, host_buffers, device, "rfi_bad_input", "rfi_bad_input.hsaco") {
+    hsaCommand(config, unique_name, host_buffers, device, "rfi_bad_input" KERNEL_EXT,
+               "rfi_bad_input.hsaco") {
     command_type = gpuCommandType::KERNEL;
     // Retrieve parameters from kotekan config
     _num_elements = config.get<uint32_t>(unique_name, "num_elements");
@@ -51,7 +57,7 @@ hsa_signal_t hsaRfiBadInput::execute(int gpu_frame_id, hsa_signal_t precede_sign
     // Initialize arguments
     memset(&args, 0, sizeof(args));
     // Set argumnets to correct values
-    args.input = device.get_gpu_memory("timesum", input_frame_len);
+    args.input = device.get_gpu_memory("time_sum", input_frame_len);
     args.output = device.get_gpu_memory_array("rfi_bad_input", gpu_frame_id, output_frame_len);
     args.M = _sk_step;
     args.num_sk = _samples_per_data_set / _sk_step;

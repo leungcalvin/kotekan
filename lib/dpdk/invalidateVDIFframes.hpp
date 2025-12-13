@@ -8,14 +8,15 @@
 #ifndef INVALIDATE_VDIF_FRAMES_HPP
 #define INVALIDATE_VDIF_FRAMES_HPP
 
-#include "Stage.hpp"
+#include "Config.hpp"          // for Config
+#include "Stage.hpp"           // for Stage
+#include "bufferContainer.hpp" // for bufferContainer
 
-#include "json.hpp"
-
-#include <vector>
+#include <stdint.h> // for int32_t, uint32_t
+#include <string>   // for string
 
 /**
- * @brief Invalidate VDIF frames in the @c out_buf based on flags in the @lost_samples_buf
+ * @brief Invalidate VDIF frames in the @c out_buf based on flags in the @c lost_samples_buf
  *
  * Note the synchronization is a little non-standard here.  We wait for the buffer
  * which contains the flags to be full and register as a consumer on that buffer.
@@ -25,18 +26,22 @@
  *
  * @par Buffers
  * @buffer out_buf Kotekan buffer with VDIF frame data already filled
- *     @buffer_format Array with blocks of @C sample_size byte time samples
+ *     @buffer_format Array with blocks of @c sample_size byte time samples
  *     @buffer_metadata chimeMetadata
  * @buffer lost_samples_buf Array of flags which indicate if a sample in a given location is lost
  *     @buffer_format Array of flags uint8_t flags which are either 0 (unset) or 1 (set)
  *     @buffer_metadata chimeMetadata
+ *
+ * @par Metrics
+ * @metric kotekan_vdif_lost_frames_total
+ *        The number of VDIF frames invalidated because of lost packets.
  *
  * @author Andre Renard
  */
 class invalidateVDIFframes : public kotekan::Stage {
 public:
     /// Standard constructor
-    invalidateVDIFframes(kotekan::Config& config, const string& unique_name,
+    invalidateVDIFframes(kotekan::Config& config, const std::string& unique_name,
                          kotekan::bufferContainer& buffer_container);
 
     /// Destructor

@@ -10,7 +10,7 @@ using kotekan::Config;
 
 REGISTER_CL_COMMAND(clKVCorr);
 
-clKVCorr::clKVCorr(Config& config, const string& unique_name, bufferContainer& host_buffers,
+clKVCorr::clKVCorr(Config& config, const std::string& unique_name, bufferContainer& host_buffers,
                    clDeviceInterface& device) :
     clCommand(config, unique_name, host_buffers, device, "corr", "kv_corr.cl") {
     _num_elements = config.get<int>(unique_name, "num_elements");
@@ -21,12 +21,20 @@ clKVCorr::clKVCorr(Config& config, const string& unique_name, bufferContainer& h
     _samples_per_data_set = config.get<int>(unique_name, "samples_per_data_set");
     _data_format = config.get_default<string>(unique_name, "data_format", "4+4b");
     _full_complicated = config.get_default<bool>(unique_name, "full_complicated", false);
+    _legacy_opencl = config.get_default<bool>(unique_name, "legacy_opencl", false);
 
     if (_data_format == "4+4b") {
-        if (small_array)
-            kernel_file_name = config.get_default<string>(unique_name, "kernel_path", ".") + "/"
-                               + config.get_default<string>(unique_name, "kernel", "kv_corr_sm.cl");
-        else if (_full_complicated) {
+        if (small_array) {
+            if (_legacy_opencl) {
+                kernel_file_name =
+                    config.get_default<string>(unique_name, "kernel_path", ".") + "/"
+                    + config.get_default<string>(unique_name, "kernel", "kv_corr_sm_legacy.cl");
+            } else {
+                kernel_file_name =
+                    config.get_default<string>(unique_name, "kernel_path", ".") + "/"
+                    + config.get_default<string>(unique_name, "kernel", "kv_corr_sm.cl");
+            }
+        } else if (_full_complicated) {
             if (small_array)
                 throw std::invalid_argument("Can't do full_complicated with num_elements < 32");
             else
@@ -38,7 +46,7 @@ clKVCorr::clKVCorr(Config& config, const string& unique_name, bufferContainer& h
         kernel_file_name = config.get_default<string>(unique_name, "kernel_path", ".") + "/"
                            + config.get_default<string>(unique_name, "kernel", "kv_corr_dot4b.cl");
     } else {
-        throw std::invalid_argument("Unknown Data Format: " + _data_format);
+        throw std::invalid_argument(fmt::format(fmt("Unknown Data Format: {:s}"), _data_format));
     }
 
     defineOutputDataMap(); // id_x_map and id_y_map depend on this call.
@@ -58,7 +66,7 @@ void clKVCorr::build() {
 
     cl_int err;
 
-    string cl_options = "";
+    std::string cl_options = "";
 
     if (_data_format == "4+4b") {
         INFO("Running 4+4b CHIME-like data");
@@ -106,15 +114,15 @@ void clKVCorr::build() {
 
     cl_device_id dev_id = device.get_id();
 
-    err = clBuildProgram(program, 1, &dev_id, cl_options.c_str(), NULL, NULL);
+    err = clBuildProgram(program, 1, &dev_id, cl_options.c_str(), nullptr, nullptr);
     if (err != CL_SUCCESS) {
         size_t len = 0;
-        CHECK_CL_ERROR(
-            clGetProgramBuildInfo(program, device.get_id(), CL_PROGRAM_BUILD_LOG, 0, NULL, &len));
+        CHECK_CL_ERROR(clGetProgramBuildInfo(program, device.get_id(), CL_PROGRAM_BUILD_LOG, 0,
+                                             nullptr, &len));
         char* buffer = (char*)calloc(len, sizeof(char));
         CHECK_CL_ERROR(clGetProgramBuildInfo(program, device.get_id(), CL_PROGRAM_BUILD_LOG, len,
-                                             buffer, NULL));
-        INFO("CL failed. Build log follows: \n %s", buffer);
+                                             buffer, nullptr));
+        INFO("CL failed. Build log follows: \n {:s}", buffer);
         free(buffer);
     }
     CHECK_CL_ERROR(err);
@@ -148,7 +156,7 @@ cl_event clKVCorr::execute(int gpu_frame_id, cl_event pre_event) {
     setKernelArg(1, presum_memory);
     setKernelArg(2, output_memory_frame);
 
-    CHECK_CL_ERROR(clEnqueueNDRangeKernel(device.getQueue(1), kernel, 3, NULL, gws, lws, 1,
+    CHECK_CL_ERROR(clEnqueueNDRangeKernel(device.getQueue(1), kernel, 3, nullptr, gws, lws, 1,
                                           &pre_event, &post_events[gpu_frame_id]));
 
     return post_events[gpu_frame_id];

@@ -11,21 +11,34 @@
 #ifndef VIS_UTIL_HPP
 #define VIS_UTIL_HPP
 
-#include "Config.hpp"
-#include "buffer.h"
 
-#include "gsl-lite.hpp"
-#include "json.hpp"
+#include "Config.hpp" // for Config
+#include "buffer.h"   // for Buffer
 
-#include <complex>
-#include <cstdint>
-#include <functional>
-#include <string>
-#include <sys/time.h>
-#include <time.h>
-#include <vector>
+#include "fmt.hpp"      // for format_context, formatter
+#include "gsl-lite.hpp" // for span
+#include "json.hpp"     // for json
 
-using json = nlohmann::json;
+#include <algorithm> // for max
+#include <chrono>
+#include <complex>     // for complex, imag, real
+#include <cstdint>     // for uint32_t, uint16_t, int64_t, int32_t, uint64_t
+#include <cstdlib>     // for size_t, (anonymous), div
+#include <deque>       // for deque
+#include <functional>  // for function
+#include <iosfwd>      // for ostream
+#include <map>         // for map
+#include <math.h>      // for fmod
+#include <memory>      // for unique_ptr
+#include <mutex>       // for mutex, lock_guard
+#include <string>      // for string
+#include <sys/time.h>  // for timeval, CLOCK_REALTIME
+#include <sys/types.h> // for __syscall_slong_t, suseconds_t, time_t
+#include <time.h>      // for timespec, clock_gettime
+#include <tuple>       // for tuple, tie
+#include <type_traits> // for enable_if_t, is_integral, make_unsigned
+#include <utility>     // for pair
+#include <vector>      // for vector
 
 /// Define an alias for the single precision complex type
 using cfloat = typename std::complex<float>;
@@ -146,29 +159,29 @@ inline bool operator>(const time_ctype& a, const time_ctype& b) {
 }
 
 // Conversions of the index types to json
-void to_json(json& j, const freq_ctype& f);
-void to_json(json& j, const input_ctype& f);
-void to_json(json& j, const prod_ctype& f);
-void to_json(json& j, const time_ctype& f);
-void to_json(json& j, const stack_ctype& f);
-void to_json(json& j, const rstack_ctype& f);
+void to_json(nlohmann::json& j, const freq_ctype& f);
+void to_json(nlohmann::json& j, const input_ctype& f);
+void to_json(nlohmann::json& j, const prod_ctype& f);
+void to_json(nlohmann::json& j, const time_ctype& f);
+void to_json(nlohmann::json& j, const stack_ctype& f);
+void to_json(nlohmann::json& j, const rstack_ctype& f);
 
-void from_json(const json& j, freq_ctype& f);
-void from_json(const json& j, input_ctype& f);
-void from_json(const json& j, prod_ctype& f);
-void from_json(const json& j, time_ctype& f);
-void from_json(const json& j, stack_ctype& f);
-void from_json(const json& j, rstack_ctype& f);
+void from_json(const nlohmann::json& j, freq_ctype& f);
+void from_json(const nlohmann::json& j, input_ctype& f);
+void from_json(const nlohmann::json& j, prod_ctype& f);
+void from_json(const nlohmann::json& j, time_ctype& f);
+void from_json(const nlohmann::json& j, stack_ctype& f);
+void from_json(const nlohmann::json& j, rstack_ctype& f);
 
 // Conversion of std::complex<T> to and from json
 namespace std {
 template<class T>
-void to_json(json& j, const std::complex<T>& p) {
-    j = json{p.real(), p.imag()};
+void to_json(nlohmann::json& j, const std::complex<T>& p) {
+    j = nlohmann::json{p.real(), p.imag()};
 }
 
 template<class T>
-void from_json(const json& j, std::complex<T>& p) {
+void from_json(const nlohmann::json& j, std::complex<T>& p) {
     p = std::complex<T>{j.at(0).get<T>(), j.at(1).get<T>()};
 }
 } // namespace std
@@ -349,6 +362,21 @@ inline double current_time() {
     return ts_to_double(ts);
 }
 
+/**
+ * @brief Calculate the size of GPU packed data.
+ *
+ * @note This is the length of a *single* frequency.
+ *
+ * @param  N      The number of elements.
+ * @param  block  The size of a block.
+ * @return        The size of the packd GPU data.
+ **/
+inline constexpr uint32_t gpu_N2_size(uint32_t N, uint32_t block) {
+    const auto num_blocks1 = ((N - 1) / block) + 1;               // Blocks per side
+    const auto num_blocks2 = num_blocks1 * (num_blocks1 + 1) / 2; // ... triangle
+    return (num_blocks2 * block * block);                         // Total size
+}
+
 
 /**
  * @brief Copy the visibility triangle into a contiguous array.
@@ -442,13 +470,13 @@ struct_layout<T> struct_alignment(std::vector<std::tuple<T, size_t, size_t>> mem
 
 
 /**
- * @brief Calculate the norm of a complex number (i.e. |z|^2).
+ * @brief Calculate the norm of a complex number (i.e. |x|^2).
  *
  * In theory std::norm should do this, but the version in libstdc++ is super
  * slow.
  *
- * @param z  Number to find the norm of.
- * @returns  Norm of z.
+ * @param x  Number to find the norm of.
+ * @returns  Norm of x.
  **/
 template<typename T>
 inline T fast_norm(const T& x) {
@@ -501,6 +529,156 @@ private:
     double alpha;
 
     bool initialised = false;
+};
+
+/**
+ * @class SlidingWindowMinMax
+ *
+ * @brief Use two deques to keep tracking minimum and maximum values.
+ *
+ * This class is based on a modified version of:
+ * https://www.nayuki.io/page/sliding-window-minimum-maximum-algorithm
+ **/
+class SlidingWindowMinMax {
+
+public:
+    /**
+     * @brief Get the current minimum value from the front of min_deque.
+     *
+     * @return The current minimum value.
+     **/
+    double get_min();
+
+    /**
+     * @brief Get the current maximum value from the front of max_deque.
+     *
+     * @return The current maximum value.
+     **/
+    double get_max();
+
+    /**
+     * @brief Add a new value to both min_deque and max_deque.
+     *        The insert position is based on the input value.
+     *        All values greater than the input are removed in min_deque;
+     *        All values less than the input are removed in max_deque;
+     **/
+    void add_tail(double val);
+
+    /**
+     * @brief Remove the given value from the front of min_deque or max_deque.
+     **/
+    void remove_head(double val);
+
+private:
+    std::deque<double> min_deque;
+    std::deque<double> max_deque;
+};
+
+/**
+ * @class StatTracker
+ *
+ * @brief Store samples and compute statistics.
+ *
+ * There are two ways in this class to implement min/max (i.e., sliding window and brute force).
+ * The sliding window approach uses O(1) time to get min/max but spends more time when a sample is
+ *added. The brute force approach uses O(n) time to traverse the entire buffer without overhead in
+ *add_sample(). "is_optimized" is the flag to switch between two methods (true: sliding window;
+ *false: brute force). Normally, if get_min/max() is called often, "is_optimized" should be set to
+ *true.
+ **/
+class StatTracker {
+
+public:
+    /**
+     * @brief Create a ring buffer.
+     *
+     * @param name The statistic's name.
+     * @param unit Sample unit.
+     * @param size The size of the ring buffer.
+     * @param is_optimized Flag of min/max optimization.
+     **/
+    explicit StatTracker(std::string name, std::string unit, size_t size = 100,
+                         bool is_optimized = true);
+
+    /**
+     * @brief Add a new sample value to the buffer.
+     *        if the buffer is full, the new sample will overwrite the earliest one.
+     *
+     * @param new_val The sample to add.
+     **/
+    void add_sample(double new_val);
+
+    /**
+     * @brief Return the maximum sample based on all values stored in buffer.
+     *
+     * @return The current maximum sample.
+     **/
+    double get_max();
+
+    /**
+     * @brief Return the minimum sample based on all values stored in buffer.
+     *
+     * @return The current minimum sample.
+     **/
+    double get_min();
+
+    /**
+     * @brief Return the average value based on all samples stored in buffer.
+     *
+     * @return The current average value.
+     **/
+    double get_avg();
+
+    /**
+     * @brief Return the standard deviation based on all samples stored in buffer.
+     *
+     * @return The current standard deviation.
+     **/
+    double get_std_dev();
+
+    /**
+     * @brief Return the last value added, will be NAN if no samples have been added
+     *
+     * @return The last sample or NAN
+     **/
+    double get_current();
+
+    /**
+     * @brief Return tracker content in json format.
+     *
+     * @return A json object of tracker content.
+     **/
+    nlohmann::json get_json();
+
+    /**
+     * @brief Return tracker stats in json format.
+     *
+     * @return A json object of tracker min,max,avg,std.
+     **/
+    nlohmann::json get_current_json();
+
+private:
+    SlidingWindowMinMax min_max;
+
+    struct sample {
+        double value;
+        std::chrono::system_clock::time_point timestamp;
+    };
+    std::unique_ptr<sample[]> rbuf;
+    size_t end;
+    size_t buf_size;
+    size_t count;
+
+    double avg;
+    double dist;
+    double var;
+    double std_dev;
+
+    std::string name;
+    std::string unit;
+    bool is_optimized;
+
+    std::recursive_mutex tracker_lock;
 };
 
 // Zip, unzip adapted from https://gist.github.com/yig/32fe51874f3911d1c612
@@ -630,23 +808,30 @@ public:
         return t;
     }
 
-    modulo<T>& operator+=(const T& rhs) {
+    template<typename V, typename std::enable_if_t<std::is_integral<V>::value>* = nullptr>
+    modulo<T>& operator+=(const V& rhs) {
         _i += rhs;
         return *this;
     }
-    modulo<T>& operator-=(const T& rhs) {
+
+    template<typename V, typename std::enable_if_t<std::is_integral<V>::value>* = nullptr>
+    modulo<T>& operator-=(const V& rhs) {
         _i -= rhs;
         return *this;
     }
 
     // Add and subtract are *asymmetric*. Must be always be modulo<T> +/- T
-    friend modulo<T> operator+(modulo<T> lhs, const T& rhs) {
-        lhs += rhs;
-        return lhs;
+    template<typename V, typename std::enable_if_t<std::is_integral<V>::value>* = nullptr>
+    friend modulo<T> operator+(modulo<T> lhs, const V& rhs) {
+        modulo<T> t(lhs);
+        t += rhs;
+        return t;
     }
-    friend modulo<T> operator-(modulo<T> lhs, const T& rhs) {
-        lhs -= rhs;
-        return lhs;
+    template<typename V, typename std::enable_if_t<std::is_integral<V>::value>* = nullptr>
+    friend modulo<T> operator-(modulo<T> lhs, const V& rhs) {
+        modulo<T> t(lhs);
+        t -= rhs;
+        return t;
     }
 
     // Comparisons are always false if the bases don't match
@@ -707,11 +892,23 @@ public:
     /**
      * @brief Create a frameID for a given buffer.
      *
-     * @param Buffer to use.
+     * @param buf   Buffer to use.
      * @returns frameID instance.
      **/
     frameID(const Buffer* buf) : modulo<int>(buf->num_frames) {}
 };
+
+/**
+ *@brief FMT formatter that casts frameIDs to int so that `format("{:d}", frame_id)` works.
+ */
+namespace fmt {
+template<>
+struct formatter<frameID> : formatter<int> {
+    auto format(const frameID id, format_context& ctx) {
+        return formatter<int>::format((int)id, ctx);
+    }
+};
+} // namespace fmt
 
 
 #endif

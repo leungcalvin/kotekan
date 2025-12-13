@@ -2,7 +2,8 @@
 
 using kotekan::Config;
 
-clRfiOutput::clRfiOutput(const char* param_name, Config& param_config, const string& unique_name) :
+clRfiOutput::clRfiOutput(const char* param_name, Config& param_config,
+                         const std::string& unique_name) :
     gpu_command(param_name, param_config, unique_name) {}
 
 clRfiOutput::~clRfiOutput() {}
@@ -21,7 +22,7 @@ cl_event clRfiOutput::execute(int param_bufferID, class device_interface& param_
         param_Device.getQueue(0), param_Device.getRfiOutputBuffer(param_bufferID), CL_FALSE, 0,
         param_Device.getRfiBuf()->frame_size, param_Device.getRfiBuf()->frames[param_bufferID], 1,
         &param_PrecedeEvent, &postEvent[param_bufferID]));
-    DEBUG("RFI output copied to buffer id %d", param_bufferID);
+    DEBUG("RFI output copied to buffer id {:d}", param_bufferID);
     // Return post event
     return postEvent[param_bufferID];
 }

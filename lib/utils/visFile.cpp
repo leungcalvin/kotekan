@@ -1,28 +1,14 @@
 
 #include "visFile.hpp"
 
-#include "errors.h"
-#include "version.h"
+#include "fmt.hpp" // for format, fmt
 
-#include "fmt.hpp"
-
-#include <algorithm>
-#include <fcntl.h>
-#include <fstream>
-#include <iomanip>
-#include <iostream>
-#include <libgen.h>
-#include <stdexcept>
-#include <sys/stat.h>
-#include <time.h>
-#include <unistd.h>
-
-
-std::map<std::string, std::function<visFile*()>>& visFile::_registered_types() {
-    static std::map<std::string, std::function<visFile*()>> _register;
-
-    return _register;
-}
+#include <ctime>      // for gmtime, time_t
+#include <fstream>    // for basic_ostream::operator<<, ofstream, endl, basic_ostream, basic_os...
+#include <iterator>   // for reverse_iterator
+#include <libgen.h>   // for dirname, basename
+#include <sys/stat.h> // for mkdir
+#include <unistd.h>   // for getpid
 
 
 visFileBundle::~visFileBundle() {
@@ -56,8 +42,8 @@ bool visFileBundle::resolve_sample(time_ctype new_time) {
 
         if (new_time < min_time) {
             // This data is older that anything else in the map so we should just drop it
-            INFO("Dropping integration as buffer (FPGA count: %" PRIu64
-                 ") arrived too late (minimum in pool %" PRIu64 ")",
+            INFO("Dropping integration as buffer (FPGA count: {:d}) arrived too late (minimum in "
+                 "pool {:d})",
                  new_time.fpga_count, min_time.fpga_count);
             return false;
         }
@@ -93,7 +79,7 @@ bool visFileBundle::resolve_sample(time_ctype new_time) {
         // then it must lie within the range, but not have been saved into the
         // files already. This means that adding it would make the files time
         // axis be out of order, so we just skip it for now.
-        INFO("Skipping integration (FPGA count %" PRIu64 ") as it would be written out of order.",
+        INFO("Skipping integration (FPGA count {:d}) as it would be written out of order.",
              new_time.fpga_count);
         return false;
     }
@@ -109,44 +95,24 @@ void visFileBundle::add_file(time_ctype first_time) {
     // Start the acq and create the directory if required
     if (acq_name.empty()) {
         // Format the time (annoyingly you still have to use streams for this)
-        acq_name = fmt::format("{:%Y%m%dT%H%M%SZ}_{}_corr", *std::gmtime(&t), instrument_name);
+        acq_name = fmt::format(acq_fmt, fmt::arg("acq_start", *std::gmtime(&t)));
         // Set the acq fields on the instance
         acq_start_time = first_time.ctime;
 
         // Create acquisition directory. Don't bother checking if it already exists, just let it
         // transparently fail
-        mkdir((root_path + "/" + acq_name).c_str(), 0755);
+        mkdir((root_path + "/" + acq_name).c_str(), 0775);
     }
 
     // Construct the name of the new file
     uint32_t time_since_start = (uint32_t)(first_time.ctime - acq_start_time);
-    std::string file_name = fmt::format("{:08d}_{:04d}", time_since_start, freq_chunk);
+    std::string file_name =
+        fmt::format(file_fmt, fmt::arg("seconds_since_start", time_since_start));
 
     // Create the file, create room for the first sample and add into the file map
     auto file = mk_file(file_name, acq_name, root_path);
     auto ind = file->extend_time(first_time);
     vis_file_map[first_time] = std::make_pair(file, ind);
-}
-
-void visCalFileBundle::set_file_name(std::string fname, std::string aname) {
-    file_name = fname;
-    acq_name = aname;
-}
-
-void visCalFileBundle::add_file(time_ctype first_time) {
-    // Create directory
-    mkdir((root_path + "/" + acq_name).c_str(), 0755);
-    // Create the file, create room for the first sample and add into the file map
-    auto file = mk_file(file_name, acq_name, root_path);
-    auto ind = file->extend_time(first_time);
-    vis_file_map[first_time] = std::make_pair(file, ind);
-}
-
-
-void visCalFileBundle::swap_file(std::string new_fname, std::string new_aname) {
-    // Change the file and and request writing to a new file
-    set_file_name(new_fname, new_aname);
-    change_file = true;
 }
 
 

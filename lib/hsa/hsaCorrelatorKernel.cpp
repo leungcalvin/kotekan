@@ -1,11 +1,26 @@
 #include "hsaCorrelatorKernel.hpp"
 
+#include "Config.hpp"             // for Config
+#include "gpuCommand.hpp"         // for gpuCommandType, gpuCommandType::KERNEL
+#include "hsaBase.h"              // for hsa_host_free, hsa_host_malloc
+#include "hsaCommand.hpp"         // for kernelParams, REGISTER_HSA_COMMAND, _factory_aliashsaC...
+#include "hsaDeviceInterface.hpp" // for hsaDeviceInterface, Config
+#include "kotekanLogging.hpp"     // for DEBUG2
+
+#include "fmt.hpp" // for format, fmt
+
+#include <cstdint>   // for int32_t
+#include <exception> // for exception
+#include <regex>     // for match_results<>::_Base_type
+#include <string.h>  // for memcpy, memset
+#include <vector>    // for vector
+
 using kotekan::bufferContainer;
 using kotekan::Config;
 
 REGISTER_HSA_COMMAND(hsaCorrelatorKernel);
 
-hsaCorrelatorKernel::hsaCorrelatorKernel(Config& config, const string& unique_name,
+hsaCorrelatorKernel::hsaCorrelatorKernel(Config& config, const std::string& unique_name,
                                          bufferContainer& host_buffers,
                                          hsaDeviceInterface& device) :
     hsaSubframeCommand(config, unique_name, host_buffers, device, "CHIME_X", "N2.hsaco") {
@@ -30,7 +45,7 @@ hsaCorrelatorKernel::hsaCorrelatorKernel(Config& config, const string& unique_na
 
 
     // Allocate and copy the block map
-    host_block_map = (uint32_t*)hsa_host_malloc(block_map_len);
+    host_block_map = (uint32_t*)hsa_host_malloc(block_map_len, device.get_gpu_numa_node());
     int block_id = 0;
     for (int y = 0; block_id < _num_blocks; y++) {
         for (int x = y; x < _num_elements / block_size; x++) {
@@ -45,7 +60,8 @@ hsaCorrelatorKernel::hsaCorrelatorKernel(Config& config, const string& unique_na
     device.sync_copy_host_to_gpu(device_block_map, host_block_map, block_map_len);
 
     // Create the extra kernel args object.
-    host_kernel_args = (corr_kernel_config_t*)hsa_host_malloc(sizeof(corr_kernel_config_t));
+    host_kernel_args = (corr_kernel_config_t*)hsa_host_malloc(sizeof(corr_kernel_config_t),
+                                                              device.get_gpu_numa_node());
     host_kernel_args->n_elem = _num_elements;
     host_kernel_args->n_intg = _n_intg;
     host_kernel_args->n_iter = _sub_frame_samples;
@@ -86,22 +102,24 @@ hsa_signal_t hsaCorrelatorKernel::execute(int gpu_frame_id, hsa_signal_t precede
     args.input_buffer =
         (void*)((uint8_t*)device.get_gpu_memory_array("input", gpu_frame_id, input_frame_len)
                 + _num_elements * _num_local_freq * _sub_frame_samples * _sub_frame_index);
-    args.presum_buffer = device.get_gpu_memory_array("presum_" + std::to_string(_sub_frame_index),
-                                                     gpu_frame_id, presum_len);
-    args.corr_buffer = device.get_gpu_memory_array("corr_" + std::to_string(_sub_frame_index),
+    args.presum_buffer = device.get_gpu_memory_array(
+        fmt::format(fmt("presum_{:d}"), _sub_frame_index), gpu_frame_id, presum_len);
+    args.corr_buffer = device.get_gpu_memory_array(fmt::format(fmt("corr_{:d}"), _sub_frame_index),
                                                    gpu_frame_id, corr_frame_len);
     args.blk_map = device.get_gpu_memory("block_map", block_map_len);
     args.config = device.get_gpu_memory("corr_kernel_config", sizeof(corr_kernel_config_t));
     // Allocate the kernel argument buffer from the correct region.
     memcpy(kernel_args[gpu_frame_id], &args, sizeof(args));
 
-    DEBUG2("correlatorKernel: gpu[%d][%d], input_buffer: %p, presum_buffer: %p, corr_buffer: %p, "
-           "blk_map: %p, config: %p, sizeof(args) = %d, kernels_args[%d] = %p",
+    DEBUG2("correlatorKernel: gpu[{:d}][{:d}], input_buffer: {:p}, presum_buffer: {:p}, "
+           "corr_buffer: {:p}, "
+           "blk_map: {:p}, config: {:p}, sizeof(args) = {:d}, kernels_args[{:d}] = {:p}",
            device.get_gpu_id(), gpu_frame_id, args.input_buffer, args.presum_buffer,
            args.corr_buffer, args.blk_map, args.config, (int)sizeof(args), gpu_frame_id,
            kernel_args[gpu_frame_id]);
 
-    DEBUG2("correlatorKernel: gpu[%d][%d], wgx %d, wgy %d, wgz %d, gsx %d, gsy %d, gsz %d",
+    DEBUG2("correlatorKernel: gpu[{:d}][{:d}], wgx {:d}, wgy {:d}, wgz {:d}, gsx {:d}, gsy {:d}, "
+           "gsz {:d}",
            device.get_gpu_id(), gpu_frame_id, 16, 4, 1, 16, 4 * _sub_frame_samples / _n_intg,
            _num_blocks);
 

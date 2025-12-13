@@ -1,7 +1,7 @@
 #include "clBeamformPhaseData.hpp"
 
 #include "buffer.h"
-#include "chimeMetadata.h"
+#include "chimeMetadata.hpp"
 #include "errors.h"
 
 #include <math.h>
@@ -15,7 +15,7 @@ using kotekan::Config;
 
 REGISTER_CL_COMMAND(clBeamformPhaseData);
 
-clBeamformPhaseData::clBeamformPhaseData(Config& config, const string& unique_name,
+clBeamformPhaseData::clBeamformPhaseData(Config& config, const std::string& unique_name,
                                          bufferContainer& host_buffers, clDeviceInterface& device) :
     clCommand(config, unique_name, host_buffers, device, "", "") {
     command_type = gpuCommandType::NOT_SET;
@@ -43,7 +43,7 @@ void clBeamformPhaseData::build() {
     phases[0] = (float*)malloc(_num_elements * sizeof(float));
     phases[1] = (float*)malloc(_num_elements * sizeof(float));
 
-    start_beamform_time = time(NULL); // Current time.
+    start_beamform_time = time(nullptr); // Current time.
 }
 
 cl_event clBeamformPhaseData::execute(int gpu_frame_id, cl_event pre_event) {
@@ -137,8 +137,8 @@ void clBeamformPhaseData::get_delays(float* phases, time_t beamform_time) {
         phases[i] = TAU * cos(effective_angle) * offset_distance * one_over_c;
     }
     // ikt - commented out to test performance without INFO calls.
-    //    INFO("get_delays: Computed delays: tnow = %d, lat = %f, long = %f, RA = %f, DEC = %f, LST
-    //    = %f, ALT = %f, AZ = %f",
+    //    INFO("get_delays: Computed delays: tnow = {:d}, lat = {:f}, long = {:f}, RA = {:f}, DEC =
+    //    {:f}, LST = {:f}, ALT = {:f}, AZ = {:f}",
     //            (int)beamform_time, inst_lat, inst_long, ra, dec, lst, alt/D2R, az/D2R);
 
     return;

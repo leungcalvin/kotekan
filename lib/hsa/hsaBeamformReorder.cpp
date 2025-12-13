@@ -1,13 +1,24 @@
 #include "hsaBeamformReorder.hpp"
 
+#include "Config.hpp"             // for Config
+#include "gpuCommand.hpp"         // for gpuCommandType, gpuCommandType::KERNEL
+#include "hsaBase.h"              // for hsa_host_free, hsa_host_malloc
+#include "hsaDeviceInterface.hpp" // for hsaDeviceInterface, Config
+
+#include <cstdint>     // for int32_t
+#include <exception>   // for exception
+#include <regex>       // for match_results<>::_Base_type
+#include <string.h>    // for memcpy, memset
+#include <sys/types.h> // for uint
+
 using kotekan::bufferContainer;
 using kotekan::Config;
 
 REGISTER_HSA_COMMAND(hsaBeamformReorder);
 
-hsaBeamformReorder::hsaBeamformReorder(Config& config, const string& unique_name,
+hsaBeamformReorder::hsaBeamformReorder(Config& config, const std::string& unique_name,
                                        bufferContainer& host_buffers, hsaDeviceInterface& device) :
-    hsaCommand(config, unique_name, host_buffers, device, "reorder", "reorder.hsaco") {
+    hsaCommand(config, unique_name, host_buffers, device, "reorder" KERNEL_EXT, "reorder.hsaco") {
     command_type = gpuCommandType::KERNEL;
 
     _num_elements = config.get<int32_t>(unique_name, "num_elements");
@@ -20,7 +31,7 @@ hsaBeamformReorder::hsaBeamformReorder(Config& config, const string& unique_name
 
     // Create a C style array for backwards compatibility.
     map_len = 512 * sizeof(int);
-    _reorder_map_c = (int*)hsa_host_malloc(map_len);
+    _reorder_map_c = (int*)hsa_host_malloc(map_len, device.get_gpu_numa_node());
     for (uint i = 0; i < 512; ++i) {
         _reorder_map_c[i] = _reorder_map[i];
     }

@@ -1,21 +1,23 @@
 #ifndef REST_SERVER_HPP
 #define REST_SERVER_HPP
 
-#include "Config.hpp"
+#include "Config.hpp" // for Config
 
-#include "json.hpp"
+#include "json.hpp" // for json
 
-#include <atomic>
-#include <event2/event.h>
-#include <event2/http.h>
-#include <event2/thread.h>
-#include <evhttp.h>
-#include <functional>
-#include <map>
-#include <shared_mutex>
-#include <thread>
+#include <atomic>        // for atomic
+#include <event2/util.h> // for evutil_socket_t
+#include <evhttp.h>      // for evhttp  // IWYU pragma: keep
+#include <functional>    // for function
+#include <map>           // for map
+#include <shared_mutex>  // for shared_timed_mutex
+#include <stdint.h>      // for uint8_t
+#include <string>        // for string, allocator
+#include <sys/types.h>   // for u_short
+#include <thread>        // for thread
 
 namespace kotekan {
+
 
 enum class HTTP_RESPONSE {
     OK = 200,
@@ -48,7 +50,7 @@ public:
      *        HTTP "Error:" header
      *
      * @param message The message to include in the HTTP header
-     * @param status_code The HTTP error code.
+     * @param status The HTTP error code.
      */
     void send_error(const std::string& message, const HTTP_RESPONSE& status);
 
@@ -70,7 +72,7 @@ public:
     /**
      * @brief Sents an empty reply with the given status code
      *
-     * @param status_code The HTTP status code to return
+     * @param status The HTTP status code to return
      */
     void send_empty_reply(const HTTP_RESPONSE& status);
 
@@ -94,6 +96,19 @@ public:
      * @return The uri of the http request message
      */
     std::string get_uri();
+
+    /**
+     * @brief Gets the query args as a map of key value strings
+     *
+     * Example "/my_endpoint?val=42&myval=hello" would return a map with items:
+     * map["val"] == "42"
+     * map["myval"] == "hello"
+     *
+     * In the case there are no URL query args, an empty map is returned.
+     *
+     * @return A map with string keys and string values with any url query args
+     */
+    std::map<std::string, std::string> get_query();
 
 private:
     /// The request details
@@ -191,7 +206,7 @@ public:
      * Note: does not check that the endpoint exists,
      * of if an alias for this endpoint already exists.
      *
-     * @TODO Should there be more error checking here?
+     * @todo Should there be more error checking here?
      *
      * @param alias The new endpoint
      * @param target The existing endpoint to map to
@@ -216,6 +231,9 @@ public:
      * @brief Removes all aliases
      */
     void remove_all_aliases();
+
+    /// The port to use
+    const u_short& port;
 
 private:
     /// Private constuctor
@@ -245,15 +263,15 @@ private:
     /**
      * @brief Internal callback function for the evhttp server.
      *
-     * @param evhttp_request The request object
-     * @param cb_data Expects a pointer to the REST server object
+     * @param request   The request object
+     * @param cb_data   Expects a pointer to the REST server object
      */
     static void handle_request(struct evhttp_request* request, void* cb_data);
 
     /**
      * @brief Callback which returns list of endpoints to caller.
      *
-     * @param conn The connection to return endpoints too.
+     * @param conn The connection to return endpoints to.
      */
     void endpoint_list_callback(connectionInstance& conn);
 
@@ -277,7 +295,7 @@ private:
      * @param request The libevent http request object
      * @return string The http message if it exists, or an empty string
      */
-    static string get_http_message(struct evhttp_request* request);
+    static std::string get_http_message(struct evhttp_request* request);
 
     /**
      * @brief Generates a string message to match one of the response codes
@@ -286,7 +304,7 @@ private:
      * @param status The responce code enum
      * @return string The string message matching that code
      */
-    static string get_http_responce_code_text(const HTTP_RESPONSE& status);
+    static std::string get_http_responce_code_text(const HTTP_RESPONSE& status);
 
     /**
      * @brief Returns the aliases map
@@ -299,7 +317,7 @@ private:
     std::map<std::string, std::function<void(connectionInstance&)>> get_callbacks;
 
     /// Map of JSON POST callbacks
-    std::map<std::string, std::function<void(connectionInstance&, json&)>> json_callbacks;
+    std::map<std::string, std::function<void(connectionInstance&, nlohmann::json&)>> json_callbacks;
 
     /// Alias map
     std::map<std::string, std::string> aliases;
@@ -313,11 +331,11 @@ private:
     /// The libevent HTTP server object
     struct evhttp* ev_server = nullptr;
 
-    /// The port to use
-    u_short port;
-
     /// Bind address
     std::string bind_address;
+
+    /// The port to use
+    u_short _port;
 
     /// Main server thread handle
     std::thread main_thread;

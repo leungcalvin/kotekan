@@ -9,15 +9,18 @@
 #ifndef BASEBAND_READOUT_MANAGER_HPP
 #define BASEBAND_READOUT_MANAGER_HPP
 
-#include "json.hpp"
+#include "SynchronizedQueue.hpp" // for SynchronizedQueue
 
-#include <condition_variable>
-#include <deque>
-#include <forward_list>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <vector>
+#include <chrono>       // for system_clock, system_clock::time_point
+#include <forward_list> // for forward_list
+#include <functional>   // for reference_wrapper
+#include <memory>       // for unique_ptr, shared_ptr
+#include <mutex>        // for mutex
+#include <stdint.h>     // for int64_t, uint32_t, uint64_t
+#include <string>       // for string
+#include <time.h>       // for size_t
+#include <utility>      // for pair
+#include <vector>       // for vector
 
 namespace kotekan {
 
@@ -65,6 +68,49 @@ struct basebandDumpStatus {
     basebandDumpStatus::State state = State::WAITING;
     /// Description of the failure, when the state is ERROR
     std::string reason = "";
+    /// Time when the processing started (null if ``state`` is still WAITING)
+    std::shared_ptr<std::chrono::system_clock::time_point> started = nullptr;
+    /// Time when the processing finished (null if ``state`` is not DONE or ERROR)
+    std::shared_ptr<std::chrono::system_clock::time_point> finished = nullptr;
+};
+
+
+/**
+ * @struct basebandDumpData
+ * @brief A container for baseband data and metadata.
+ *
+ * @note This class does not own the underlying data buffer, but provides a view
+ *       (i.e., a `gsl::span`) to it. Users are responsible for managing the
+ *       memory storage.
+ *
+ * @author Kiyoshi Masui
+ */
+struct basebandDumpData {
+    /// Indicates the reason why data could not be read, if it is not `Ok`
+    enum class Status { Ok, TooLong, Late, ReserveFailed, Cancelled };
+
+    /// Constructor used to indicate error
+    basebandDumpData(Status);
+    /// Initialize the container with all parameters but does not fill in the data.
+    basebandDumpData(const uint64_t event_id_, const uint32_t freq_id_,
+                     const uint32_t stream_freq_idx_, int64_t trigger_start_fpga_,
+                     int64_t trigger_length_fpga_, int dump_start_frame, int dump_end_frame);
+
+    //@{
+    /// Metadata.
+    const uint64_t event_id;
+    const uint32_t freq_id;
+    const uint32_t stream_freq_idx;
+
+    int64_t trigger_start_fpga = 0;
+    int64_t trigger_end_fpga = 0;
+    int64_t trigger_length_fpga = 0;
+    int dump_start_frame = 0;
+    int dump_end_frame = 0;
+    //@}
+
+    /// Status::Ok if the `data` is valid, or the reason why it was not read out
+    const Status status;
 };
 
 
@@ -74,7 +120,15 @@ struct basebandDumpStatus {
  */
 class basebandReadoutManager {
 public:
+    // convenience type alias for keeping a status and mutex required for modifying it
     using requestStatusMutex = std::pair<basebandDumpStatus&, std::mutex&>;
+
+    // convenience type alias for a request ready to be written to a file, together with its
+    // read-out data
+    using ReadyRequest = std::pair<basebandDumpStatus&, basebandDumpData>;
+
+    // convenience type alias for a ReadyRequest and mutex required for modifying it
+    using ReadyRequestMutex = std::pair<ReadyRequest, std::mutex&>;
 
     /**
      * @brief Adds a new baseband dump request to the `requests` queue and
@@ -103,6 +157,17 @@ public:
     std::unique_ptr<basebandReadoutManager::requestStatusMutex> get_next_waiting_request();
 
     /**
+     * @brief Adds a baseband dump request to the `ready` queue and
+     * notifier threads waiting on `has_next_ready_request`
+     */
+    void ready(const ReadyRequest&);
+
+    /**
+     * @brief Interrupts all threads blocked on "waiting" and "ready" dump request queues
+     */
+    void stop();
+
+    /**
      * @brief Tries to get the next dump request whose data is ready for writing
      *
      * This is the element in the `requests` pointed to by `waiting`, unless
@@ -127,7 +192,7 @@ public:
      *        elements of the request object are being accessed.
      *
      */
-    basebandReadoutManager::requestStatusMutex get_next_ready_request();
+    std::unique_ptr<ReadyRequestMutex> get_next_ready_request();
 
     /// Returns a unique pointer to the copy of the event status for `event_id`,
     /// or nullptr if not known
@@ -139,9 +204,9 @@ public:
 private:
     /**
      * Sequence of baseband dump requests and their status. New events are
-     * appended at the end. Events are never removed from the queue, they are
+     * appended at the head. Events are never removed from the queue, they are
      * passed to worker threads by a non-owning pointer, and their state is
-     * updated in-place. Worker threads having a pointer into the elements is
+     * updated in-place. Worker threads' having a pointer into the elements is
      * safe as long as the readout manager is guaranteed to outlive them, which
      * it will be as the manager is itself owned by the
      * `basebandApiManager`, and is created in the main thread.
@@ -150,39 +215,30 @@ private:
 
     /**
      * `requests`-updating lock. Held only while elements are added to the queue
-     * or internal pointers (`waiting`, `tail`) moved around.
+     * or internal pointers (`readout_current`, `writeout_current`) moved around.
      */
     std::mutex requests_mtx;
 
-    /**
-     * Condition used to notify that there is a valid new request in `requests`.
-     */
-    std::condition_variable has_request;
+    /// requests that have been received by the baseband API, but that the readout thread hasn't
+    /// processed yet
+    SynchronizedQueue<std::reference_wrapper<basebandDumpStatus>> waiting_queue;
 
-    using iterator = std::forward_list<basebandDumpStatus>::iterator;
-
-    /**
-     * Pointer just before the next unprocessed request (i.e., the least
-     * recently added element with `state` "waiting") in `requests`.
-     */
-    iterator waiting = requests.before_begin();
-    /// Lock to hold while accessing or updating the `waiting` element.
-    std::mutex waiting_mtx;
+    /// requests that have been processed by the readout thread, and are now ready to be written out
+    SynchronizedQueue<ReadyRequest> ready_queue;
 
     /**
-     * Pointer the element in `requests` whose data are in the process of being
-     * written (by the write thread of the readout stage).
+     * Pointer to the element in `requests` that the readout thread is currently working on
      */
-    iterator current = requests.before_begin();
-    /// Lock to hold while accessing or updating the `current` element.
-    std::mutex current_mtx;
+    basebandDumpStatus* readout_current = nullptr;
+    /// Lock to hold while accessing or updating the `readout_current` element.
+    std::mutex readout_mtx;
 
     /**
-     * Pointer to the last (most recently added) event in `requests`. We need
-     * this to append new elements without traversing the queue from the
-     * beginning.
+     * Pointer to the element in `requests` that the write thread is currently working on
      */
-    iterator tail = requests.before_begin();
+    basebandDumpStatus* writeout_current = nullptr;
+    /// Lock to hold while accessing or updating the `writeout_current` element.
+    std::mutex writeout_mtx;
 };
 
 } // namespace kotekan

@@ -8,19 +8,23 @@
 #ifndef ICE_BOARD_SHUFFLE_HPP
 #define ICE_BOARD_SHUFFLE_HPP
 
+#include "Config.hpp"
+#include "Telescope.hpp"
 #include "buffer.h"
-#include "chimeMetadata.h"
-#include "gpsTime.h"
+#include "bufferContainer.hpp"
+#include "chimeMetadata.hpp"
 #include "iceBoardHandler.hpp"
+#include "kotekanLogging.hpp"
 #include "packet_copy.h"
 #include "prometheusMetrics.hpp"
 #include "util.h"
+
 
 /**
  * @brief DPDK Packet handler which adds a final stage shuffle for systems larger than 512 elements
  *
  * @par REST Endpoints
- * @endpoint /<unique_name>/port_data ``[GET]`` Returns a large amount of stats about the port and
+ * @endpoint /\<unique_name\>/port_data ``[GET]`` Returns a large amount of stats about the port and
  * FPGA flags
  *
  * @par Buffers
@@ -36,6 +40,9 @@
  *         The total number of FPGA thrid stage shuffle errors seen
  * @metric kotekan_dpdk_shuffle_fpga_second_stage_shuffle_errors_total
  *         The total number of FPGA second stage shuffle errors seen
+ *
+ * @conf  fpga_dataset          String. The dataset ID for the data being received from
+ *                              the F-engine.
  *
  * @todo Some parts of the port_data endpoint could be refactored into the base classes
  *
@@ -53,10 +60,10 @@ public:
      * @param mbuf The DPDK rte_mbuf containing the packet.
      * @return -1 if there is a serious error requiring shutdown, 0 otherwise.
      */
-    virtual int handle_packet(struct rte_mbuf* mbuf);
+    virtual int handle_packet(struct rte_mbuf* mbuf) override;
 
     /// Updates the prometheus metrics
-    virtual void update_stats();
+    virtual void update_stats() override;
 
 protected:
     /**
@@ -73,6 +80,13 @@ protected:
      * frames.
      */
     bool advance_frames(uint64_t new_seq, bool first_time = false);
+
+    /**
+     * @brief Checks that the rules for streamIDs are met.  i.e. correct cabling.
+     *
+     * @return True if cable/streamID rules are met, False otherwise.
+     */
+    bool check_stream_id();
 
     /**
      * @brief Copies the given packet accounting for the last stage suffle.
@@ -117,6 +131,9 @@ protected:
     /// The flag buffer tracking lost samples
     struct Buffer* lost_samples_buf;
 
+    // Parameters saved from the config files
+    dset_id_t fpga_dataset;
+
     /// The active lost sample frame
     uint8_t* lost_samples_frame;
 
@@ -125,6 +142,11 @@ protected:
 
     /// Frame IDs
     int out_buf_frame_ids[shuffle_size] = {0};
+
+    /// The stream_ids for all iceBoardShuffle objects.
+    /// This might be an issue in the case of multiple indepdent
+    /// shuffle operations. In that case this will need to be factored out.
+    static ice_stream_id_t all_stream_ids[shuffle_size];
 
     // ** FPGA Second stage error counters **
 
@@ -165,13 +187,59 @@ protected:
     /// Tracks the number of times at least one of the flags in the second or
     /// thrid stage shuffle were set.  Not including the sticky flags.
     uint64_t rx_shuffle_flags_set = 0;
+
+    /// Prometheus metrics
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& third_shuffle_errors_counter;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& third_crc_errors_counter;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>&
+        third_missing_short_errors_counter;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& third_long_errors_counter;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>&
+        third_fifo_overflow_errors_counter;
+
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& second_shuffle_errors_counter;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& second_crc_errors_counter;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>&
+        second_missing_short_errors_counter;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& second_long_errors_counter;
+    kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>&
+        second_fifo_overflow_errors_counter;
 };
 
 iceBoardShuffle::iceBoardShuffle(kotekan::Config& config, const std::string& unique_name,
                                  kotekan::bufferContainer& buffer_container, int port) :
-    iceBoardHandler(config, unique_name, buffer_container, port) {
+    iceBoardHandler(config, unique_name, buffer_container, port),
+    third_shuffle_errors_counter(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_shuffle_fpga_third_stage_shuffle_errors_total", unique_name,
+        {"port", "fpga_lane"})),
+    third_crc_errors_counter(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_shuffle_fpga_third_stage_crc_errors_total", unique_name, {"port"})),
+    third_missing_short_errors_counter(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_shuffle_fpga_third_stage_missing_short_errors_total", unique_name, {"port"})),
+    third_long_errors_counter(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_shuffle_fpga_third_stage_long_errors_total", unique_name, {"port"})),
+    third_fifo_overflow_errors_counter(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_shuffle_fpga_third_stage_fifo_overflow_errors_total", unique_name, {"port"})),
+    second_shuffle_errors_counter(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_shuffle_fpga_second_stage_shuffle_errors_total", unique_name,
+        {"port", "fpga_lane"})),
+    second_crc_errors_counter(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_shuffle_fpga_second_stage_crc_errors_total", unique_name, {"port"})),
+    second_missing_short_errors_counter(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_shuffle_fpga_second_stage_missing_short_errors_total", unique_name,
+        {"port"})),
+    second_long_errors_counter(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_shuffle_fpga_second_stage_long_errors_total", unique_name, {"port"})),
+    second_fifo_overflow_errors_counter(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_shuffle_fpga_second_stage_fifo_overflow_errors_total", unique_name,
+        {"port"})) {
 
-    DEBUG("iceBoardHandler: %s", unique_name.c_str());
+    DEBUG("iceBoardHandler: {:s}", unique_name);
+
+    all_stream_ids[port] = {255, 255, 255, 255};
+
+    // Read config
+    fpga_dataset = config.get_default<dset_id_t>("/fpga_dataset", "id", dset_id_t::null);
 
     std::vector<std::string> buffer_names =
         config.get<std::vector<std::string>>(unique_name, "out_bufs");
@@ -192,9 +260,9 @@ iceBoardShuffle::iceBoardShuffle(kotekan::Config& config, const std::string& uni
     std::string endpoint_name = unique_name + "/port_data";
     kotekan::restServer::instance().register_get_callback(
         endpoint_name, [&](kotekan::connectionInstance& conn) {
-            json info = get_json_port_info();
+            nlohmann::json info = get_json_port_info();
 
-            vector<uint64_t> second_stage_errors;
+            std::vector<uint64_t> second_stage_errors;
             second_stage_errors.assign(fpga_second_stage_shuffle_errors,
                                        fpga_second_stage_shuffle_errors + 16);
             info["fpga_second_stage_shuffle_errors"] = second_stage_errors;
@@ -203,7 +271,7 @@ iceBoardShuffle::iceBoardShuffle(kotekan::Config& config, const std::string& uni
             info["fpga_second_stage_long_errors"] = fpga_second_stage_long_errors;
             info["fpga_second_stage_fifo_overflow_errors"] = fpga_second_stage_fifo_overflow_errors;
 
-            vector<uint64_t> third_stage_errors;
+            std::vector<uint64_t> third_stage_errors;
             third_stage_errors.assign(fpga_third_stage_shuffle_errors,
                                       fpga_third_stage_shuffle_errors + 8);
             info["fpga_thrid_stage_shuffle_errors"] = third_stage_errors;
@@ -227,6 +295,10 @@ inline int iceBoardShuffle::handle_packet(struct rte_mbuf* mbuf) {
         if (unlikely(!iceBoardHandler::align_first_packet(mbuf))) {
             return 0;
         } else {
+            // Check that the set of streamIDs matches the shuffle rules.
+            if (!check_stream_id())
+                return -1; // Exit if check_stream_id is false.
+
             // Get the first set of buffer frames to write into.
             // We use last seq in case there are missing frames,
             // we want to start at the alignment point.
@@ -267,9 +339,59 @@ inline int iceBoardShuffle::handle_packet(struct rte_mbuf* mbuf) {
     return 0;
 }
 
+inline bool iceBoardShuffle::check_stream_id() {
+
+    // Lock this to only one thread at a time.
+    static std::mutex alignment_mutex;
+    std::lock_guard<std::mutex> alignment_lock(alignment_mutex);
+
+    all_stream_ids[port] = port_stream_id;
+
+    uint8_t crate_id = port_stream_id.crate_id;
+    uint8_t slot_id = port_stream_id.slot_id;
+    uint8_t link_id = port_stream_id.link_id;
+    bool even = crate_id % 2 == 0;
+
+    for (uint32_t i = 0; i < shuffle_size; ++i) {
+        // No need to check the current port, or if the link hasn't been initialized
+        if (i == port || all_stream_ids[i].crate_id == 255)
+            continue;
+
+        // Check that all the slots and links are the same.
+        if (all_stream_ids[i].slot_id != slot_id || all_stream_ids[i].link_id != link_id) {
+            FATAL_ERROR("One of the link_ids or slot_ids don't match! There is a cabling problem.");
+            return false;
+        }
+
+        // Check that we don't have the same crate ID as another link
+        // This should be impossible unless there is an FPGA problem
+        if (all_stream_ids[i].crate_id == crate_id) {
+            FATAL_ERROR("Two of the crate_ids are the same! There is a cabling problem.");
+            return false;
+        }
+
+        // Check that all the crates are from the same group (all even/odd)
+        if (even != ((all_stream_ids[i].crate_id % 2) == 0)) {
+            FATAL_ERROR("The crate IDs are not all even or all odd. There is a cabling problem.");
+            return false;
+        }
+    }
+    return true;
+}
+
 inline bool iceBoardShuffle::advance_frames(uint64_t new_seq, bool first_time) {
+
+    auto& tel = Telescope::instance();
+
     struct timeval now;
-    gettimeofday(&now, NULL);
+    gettimeofday(&now, nullptr);
+
+    struct timespec gps_time;
+    gps_time.tv_sec = 0;
+    gps_time.tv_nsec = 0;
+    if (tel.gps_time_enabled()) {
+        gps_time = tel.to_time(new_seq);
+    }
 
     for (uint32_t i = 0; i < shuffle_size; ++i) {
         if (!first_time) {
@@ -281,29 +403,27 @@ inline bool iceBoardShuffle::advance_frames(uint64_t new_seq, bool first_time) {
 
         out_buf_frame[i] =
             wait_for_empty_frame(out_bufs[i], unique_name.c_str(), out_buf_frame_ids[i]);
-        if (out_buf_frame[i] == NULL)
+        if (out_buf_frame[i] == nullptr)
             return false;
 
         allocate_new_metadata_object(out_bufs[i], out_buf_frame_ids[i]);
 
         set_first_packet_recv_time(out_bufs[i], out_buf_frame_ids[i], now);
-
-        if (is_gps_global_time_set() == 1) {
-            struct timespec gps_time = compute_gps_time(new_seq);
-            set_gps_time(out_bufs[i], out_buf_frame_ids[i], gps_time);
-        }
+        set_gps_time(out_bufs[i], out_buf_frame_ids[i], gps_time);
 
         // We take the stream ID only from the first pair of crates,
         // to avoid overwriting it on different ports.
         // This makes the stream ID unique for down stream stages.
         if (port_stream_id.crate_id / 2 == 0) {
-            stream_id_t tmp_stream_id = port_stream_id;
+            ice_stream_id_t tmp_stream_id = port_stream_id;
             // Set the unused flag to store the post shuffle freq bin number.
             tmp_stream_id.unused = i;
-            set_stream_id_t(out_bufs[i], out_buf_frame_ids[i], tmp_stream_id);
+            ice_set_stream_id_t(out_bufs[i], out_buf_frame_ids[i], tmp_stream_id);
         }
 
         set_fpga_seq_num(out_bufs[i], out_buf_frame_ids[i], new_seq);
+
+        set_dataset_id(out_bufs[i], out_buf_frame_ids[i], fpga_dataset);
     }
 
     if (!first_time) {
@@ -312,8 +432,23 @@ inline bool iceBoardShuffle::advance_frames(uint64_t new_seq, bool first_time) {
     }
     lost_samples_frame =
         wait_for_empty_frame(lost_samples_buf, unique_name.c_str(), lost_samples_frame_id);
-    if (lost_samples_frame == NULL)
+    if (lost_samples_frame == nullptr)
         return false;
+
+    allocate_new_metadata_object(lost_samples_buf, lost_samples_frame_id);
+    set_fpga_seq_num(lost_samples_buf, lost_samples_frame_id, new_seq);
+    set_first_packet_recv_time(lost_samples_buf, lost_samples_frame_id, now);
+    set_gps_time(lost_samples_buf, lost_samples_frame_id, gps_time);
+    set_dataset_id(lost_samples_buf, lost_samples_frame_id, fpga_dataset);
+
+    // The lost samples buffer is the same for all 4 frequencies,
+    // so the stream ID actually covers all 4 possible `unused` freq values.
+    if (port_stream_id.crate_id / 2 == 0) {
+        ice_stream_id_t tmp_stream_id = port_stream_id;
+        tmp_stream_id.unused = 0;
+        ice_set_stream_id_t(lost_samples_buf, lost_samples_frame_id, tmp_stream_id);
+    }
+
     return true;
 }
 
@@ -324,7 +459,7 @@ inline bool iceBoardShuffle::handle_lost_samples(int64_t lost_samples) {
         last_seq + samples_per_packet - get_fpga_seq_num(out_bufs[0], out_buf_frame_ids[0]);
     uint64_t temp_seq = last_seq + samples_per_packet;
 
-    // TODO this could be made more efficent by breaking it down into blocks of memsets.
+    // TODO this could be made more efficient by breaking it down into blocks of memsets.
     while (lost_samples > 0) {
         // TODO this assumes the frame size of all the output buffers are the
         // same, which should be true in all cases, but should still be tested
@@ -347,7 +482,7 @@ inline bool iceBoardShuffle::handle_lost_samples(int64_t lost_samples) {
         // NOTE: This also introduces cache line contension since we are using one array
         // to for all 4 links, ideally we might use 4 arrays and a reduce operation to bring
         // it down to one on another core.
-        // WARN("port %d, adding lost packets at: %d", port, lost_sample_location);
+        // WARN("port {:d}, adding lost packets at: {:d}", port, lost_sample_location);
         lost_samples_frame[lost_sample_location] = 1;
         lost_sample_location += 1;
         lost_samples -= 1;
@@ -406,14 +541,14 @@ inline bool iceBoardShuffle::check_fpga_shuffle_flags(struct rte_mbuf* mbuf) {
     // Go to the last part of the packet
     // Note this assumes that the footer doesn't cross two mbuf
     // segment, but based on the packet design this should never happen.
-    while (mbuf->next != NULL) {
+    while (mbuf->next != nullptr) {
         mbuf = mbuf->next;
     }
 
     int cur_mbuf_len = mbuf->data_len;
     assert(cur_mbuf_len >= flag_len);
-    int flag_location = cur_mbuf_len - flag_len - rounding_factor;
-    assert(2048 * 2 + flag_location == 4922); // Make sure the flag address is correct.
+    assert(2048 * 2 + cur_mbuf_len - flag_len - rounding_factor
+           == 4922); // Make sure the flag address is correct.
     const uint8_t* mbuf_data =
         rte_pktmbuf_mtod_offset(mbuf, uint8_t*, cur_mbuf_len - flag_len - rounding_factor);
 
@@ -471,39 +606,31 @@ inline bool iceBoardShuffle::check_fpga_shuffle_flags(struct rte_mbuf* mbuf) {
 void iceBoardShuffle::update_stats() {
     iceBoardHandler::update_stats();
 
-    kotekan::prometheusMetrics& metrics = kotekan::prometheusMetrics::instance();
-
-    std::string tags = "port=\"" + std::to_string(port) + "\"";
+    std::string port_str = std::to_string(port);
 
     for (int i = 0; i < 8; ++i) {
-        metrics.add_stage_metric("kotekan_dpdk_shuffle_fpga_third_stage_shuffle_errors_total",
-                                 unique_name, fpga_third_stage_shuffle_errors[i],
-                                 tags + ",fpga_lane=\"" + std::to_string(i) + "\"");
+        third_shuffle_errors_counter.labels({port_str, std::to_string(i)})
+            .set(fpga_third_stage_shuffle_errors[i]);
     }
 
-    metrics.add_stage_metric("kotekan_dpdk_shuffle_fpga_third_stage_crc_errors_total", unique_name,
-                             fpga_third_stage_crc_errors, tags);
-    metrics.add_stage_metric("kotekan_dpdk_shuffle_fpga_third_stage_missing_short_errors_total",
-                             unique_name, fpga_third_stage_missing_short_errors, tags);
-    metrics.add_stage_metric("kotekan_dpdk_shuffle_fpga_third_stage_long_errors_total", unique_name,
-                             fpga_third_stage_long_errors, tags);
-    metrics.add_stage_metric("kotekan_dpdk_shuffle_fpga_third_stage_fifo_overflow_errors_total",
-                             unique_name, fpga_third_stage_fifo_overflow_errors, tags);
+    third_crc_errors_counter.labels({port_str}).set(fpga_third_stage_crc_errors);
+    third_missing_short_errors_counter.labels({port_str})
+        .set(fpga_third_stage_missing_short_errors);
+    third_long_errors_counter.labels({port_str}).set(fpga_third_stage_long_errors);
+    third_fifo_overflow_errors_counter.labels({port_str})
+        .set(fpga_third_stage_fifo_overflow_errors);
 
     for (int i = 0; i < 16; ++i) {
-        metrics.add_stage_metric("kotekan_dpdk_shuffle_fpga_second_stage_shuffle_errors_total",
-                                 unique_name, fpga_second_stage_shuffle_errors[i],
-                                 tags + ",fpga_lane=\"" + std::to_string(i) + "\"");
+        second_shuffle_errors_counter.labels({port_str, std::to_string(i)})
+            .set(fpga_second_stage_shuffle_errors[i]);
     }
 
-    metrics.add_stage_metric("kotekan_dpdk_shuffle_fpga_second_stage_crc_errors_total", unique_name,
-                             fpga_second_stage_crc_errors, tags);
-    metrics.add_stage_metric("kotekan_dpdk_shuffle_fpga_second_stage_missing_short_errors_total",
-                             unique_name, fpga_second_stage_missing_short_errors, tags);
-    metrics.add_stage_metric("kotekan_dpdk_shuffle_fpga_second_stage_long_errors_total",
-                             unique_name, fpga_second_stage_long_errors, tags);
-    metrics.add_stage_metric("kotekan_dpdk_shuffle_fpga_second_stage_fifo_overflow_errors_total",
-                             unique_name, fpga_second_stage_fifo_overflow_errors, tags);
+    second_crc_errors_counter.labels({port_str}).set(fpga_second_stage_crc_errors);
+    second_missing_short_errors_counter.labels({port_str})
+        .set(fpga_second_stage_missing_short_errors);
+    second_long_errors_counter.labels({port_str}).set(fpga_second_stage_long_errors);
+    second_fifo_overflow_errors_counter.labels({port_str})
+        .set(fpga_second_stage_fifo_overflow_errors);
 }
 
 #endif

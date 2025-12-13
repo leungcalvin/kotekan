@@ -1,10 +1,13 @@
 #include "pulsarTiming.hpp"
 
-#include "visUtil.hpp"
+#include "visUtil.hpp" // for add_nsec
 
-#include "fmt.hpp"
+#include "fmt.hpp" // for format, fmt
 
-#include <math.h>
+#include <cmath>       // for floor, pow
+#include <memory>      // for allocator_traits<>::value_type
+#include <stdexcept>   // for runtime_error
+#include <sys/types.h> // for uint
 
 Polyco::Polyco(double t, float d, double p, double f0, std::vector<float> c) :
     tmid(t),
@@ -49,8 +52,8 @@ SegmentedPolyco::SegmentedPolyco(double rot_freq, float dm, float seg, std::vect
 
     if (phase_ref.size() != tmid.size() || tmid.size() != coeff.size()) {
         throw std::runtime_error(
-            fmt::format("Number of segments is inconsistent: phase_ref({}), rot_freq({}), "
-                        "coeff({}).",
+            fmt::format(fmt("Number of segments is inconsistent: phase_ref({:d}), rot_freq({:d}), "
+                            "coeff({:d})."),
                         tmid.size(), phase_ref.size(), coeff.size()));
     }
     for (uint i = 0; i < phase_ref.size(); i++) {

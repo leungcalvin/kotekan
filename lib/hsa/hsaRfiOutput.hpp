@@ -6,7 +6,15 @@
 #ifndef HSA_RFI_OUTPUT_H
 #define HSA_RFI_OUTPUT_H
 
-#include "hsaCommand.hpp"
+#include "Config.hpp"             // for Config
+#include "buffer.h"               // for Buffer
+#include "bufferContainer.hpp"    // for bufferContainer
+#include "hsa/hsa.h"              // for hsa_signal_t
+#include "hsaCommand.hpp"         // for hsaCommand
+#include "hsaDeviceInterface.hpp" // for hsaDeviceInterface
+
+#include <stdint.h> // for int32_t
+#include <string>   // for string
 
 /*
  * @class hsaRfiOutput
@@ -30,7 +38,7 @@
 class hsaRfiOutput : public hsaCommand {
 public:
     /// Constructor
-    hsaRfiOutput(kotekan::Config& config, const string& unique_name,
+    hsaRfiOutput(kotekan::Config& config, const std::string& unique_name,
                  kotekan::bufferContainer& host_buffers, hsaDeviceInterface& device);
     /// Destructor
     virtual ~hsaRfiOutput();
@@ -48,6 +56,8 @@ private:
     Buffer* _rfi_output_buf;
     /// ID for _network_buf
     int32_t _network_buf_id;
+
+    int32_t _network_buf_precondition_id;
     /// ID for _rfi_output_buf
     int32_t _rfi_output_buf_id;
     /// ID for _rfi_output_buf_precondition
