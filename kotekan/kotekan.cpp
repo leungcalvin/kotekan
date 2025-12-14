@@ -76,7 +76,7 @@ except OSError as e:
 
 with open(file_name, "r") as stream:
     try:
-        config_json = yaml.load(stream)
+        config_json = yaml.safe_load(stream)
     except yaml.YAMLError as exc:
         sys.stderr.write(exc)
 

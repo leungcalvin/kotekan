@@ -39,7 +39,7 @@ baseband_metadata_pool:
   kotekan_metadata_pool: BasebandMetadata
   num_metadata_objects: 65536
 
-basdband_bufs:
+baseband_bufs:
   metadata_pool: baseband_metadata_pool
   frame_size: num_elements * samples_per_data_set
   num_frames: 180 * 96

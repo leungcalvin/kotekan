@@ -33,7 +33,7 @@ num_local_freq: 1
 num_data_sets: 1
 samples_per_data_set: 49152
 buffer_depth: 12
-baseband_buffer_depth: 272 # 272 = ~33 seconds after accounting for active frames
+baseband_buffer_depth: 27 # 272 = ~33 seconds after accounting for active frames
 vbuffer_depth: 32
 num_links: 4
 timesamples_per_packet: 2
@@ -47,25 +47,6 @@ sizeof_float: 4
 sizeof_int: 4
 sizeof_short: 2
 
-# N2 global options
-num_ev: 4
-# This option now does very little. You probably want to look at
-# visAccumulate:integration_time
-num_gpu_frames: 128
-# Sets the number of sub frames for shorter than ~120ms N2 output
-# Please note this requires changing the number of commands in the
-# GPU section, and the accumulate value for `samples_per_data_set`
-num_sub_frames: 4
-
-# FRB global options
-downsample_time: 3
-downsample_freq: 8
-factor_upchan: 128
-factor_upchan_out: 16
-num_frb_total_beams: 1024
-frb_missing_gains: [1.0,1.0]
-frb_scaling: 0.05 #1.0
-
 # Tracking beams global options
 feed_sep_NS: 0.3048
 feed_sep_EW: 22.0
@@ -75,12 +56,6 @@ inst_lat: 49.32070922
 inst_long: -119.62367743
 num_beams: 12
 num_pol: 2
-
-# RFI global options
-sk_step: 256
-rfi_combined: True
-rfi_sigma_cut: 5
-trunc_bias_switch: True
 
 ####################
 #### Telescope #####
@@ -92,15 +67,6 @@ telescope:
   query_frequency_map: true # Frequency map is provided via coco
   require_frequency_map: false # Make sure we have the full frequency map
   allow_default_frequency_map: false # Don't fall back on default map
-
-##########################
-#### Dataset manager #####
-##########################
-dataset_manager:
-  # This enables the dataset broker use in GPU kotekan and the RFI server.
-  use_dataset_broker: True
-  ds_broker_host: "10.1.50.11" # recv1
-  ds_broker_port: 12050
 
 ##################################
 #### Updatable Config section ####
@@ -285,11 +251,6 @@ main_pool:
   num_metadata_objects: 30 * buffer_depth + 5 * baseband_buffer_depth
                         + 100 * 8 * buffer_depth # This part is for the sk/var output.
 
-# HFB Metadata Pool
-hfb_pool:
-  kotekan_metadata_pool: HFBMetadata
-  num_metadata_objects: 30 * buffer_depth
-
 # Baseband metadata pool
 baseband_pool:
   kotekan_metadata_pool: BasebandMetadata
@@ -307,38 +268,6 @@ network_buffers:
   network_buffer_2:
     kotekan_buffer: standard
   network_buffer_3:
-    kotekan_buffer: standard
-
-gpu_n2_buffers:
-  # We need a longer output buffer depth because the
-  # output now comes in chunks of 4 at once.
-  num_frames: buffer_depth * 2
-  frame_size: 4 * num_data_sets * num_local_freq
-              * ((num_elements * num_elements) + (num_elements * block_size))
-  metadata_pool: main_pool
-  gpu_n2_output_buffer_0:
-    kotekan_buffer: standard
-  gpu_n2_output_buffer_1:
-    kotekan_buffer: standard
-  gpu_n2_output_buffer_2:
-    kotekan_buffer: standard
-  gpu_n2_output_buffer_3:
-    kotekan_buffer: standard
-  valve_buffer_0:
-    kotekan_buffer: standard
-  valve_buffer_1:
-    kotekan_buffer: standard
-  valve_buffer_2:
-    kotekan_buffer: standard
-  valve_buffer_3:
-    kotekan_buffer: standard
-  rfi_vis_buffer_0:
-    kotekan_buffer: standard
-  rfi_vis_buffer_1:
-    kotekan_buffer: standard
-  rfi_vis_buffer_2:
-    kotekan_buffer: standard
-  rfi_vis_buffer_3:
     kotekan_buffer: standard
 
 gpu_beamform_output_buffers:
@@ -362,32 +291,6 @@ gpu_beamform_output_buffers:
     kotekan_buffer: standard
   gpu_beamform_output_valved_buffer_3:
     kotekan_buffer: standard
-
-# HFB Data Buffers
-gpu_beamform_hfb_output_buffers:
-  num_frames: buffer_depth
-  frame_size: num_data_sets * factor_upchan * num_frb_total_beams * sizeof_float
-  metadata_pool: main_pool
-  gpu_beamform_hfb_output_buffer_0:
-    kotekan_buffer: standard
-  gpu_beamform_hfb_output_buffer_1:
-    kotekan_buffer: standard
-  gpu_beamform_hfb_output_buffer_2:
-    kotekan_buffer: standard
-  gpu_beamform_hfb_output_buffer_3:
-    kotekan_buffer: standard
-
-cpu_hfb_output_buffers:
-  num_frames: 8
-  metadata_pool: hfb_pool
-  beamform_hfb_output_buffer_0:
-    kotekan_buffer: hfb
-  beamform_hfb_output_buffer_1:
-    kotekan_buffer: hfb
-  beamform_hfb_output_buffer_2:
-    kotekan_buffer: hfb
-  beamform_hfb_output_buffer_3:
-    kotekan_buffer: hfb
 
 gain_frb_buffers:
   num_frames: 5
@@ -427,135 +330,6 @@ tracking_phase_buffers:
   tracking_phase_3:
     kotekan_buffer: standard
 
-tracking_output_buffers:
-  num_frames: buffer_depth
-  frame_size: samples_per_data_set * num_beams * num_pol
-  metadata_pool: main_pool
-  beamform_tracking_output_buffer_0:
-    kotekan_buffer: standard
-  beamform_tracking_output_buffer_1:
-    kotekan_buffer: standard
-  beamform_tracking_output_buffer_2:
-    kotekan_buffer: standard
-  beamform_tracking_output_buffer_3:
-    kotekan_buffer: standard
-  beamform_tracking_output_valved_buffer_0:
-    kotekan_buffer: standard
-  beamform_tracking_output_valved_buffer_1:
-    kotekan_buffer: standard
-  beamform_tracking_output_valved_buffer_2:
-    kotekan_buffer: standard
-  beamform_tracking_output_valved_buffer_3:
-    kotekan_buffer: standard
-
-# The vis buffer metadata pool
-vis_pool:
-  kotekan_metadata_pool: VisMetadata
-  num_metadata_objects: 200 * buffer_depth
-
-# Buffers
-vis_int_buffers:
-  metadata_pool: vis_pool
-  num_frames: 11
-  visbuf_5s_0:
-    kotekan_buffer: vis
-  visbuf_5s_1:
-    kotekan_buffer: vis
-  visbuf_5s_2:
-    kotekan_buffer: vis
-  visbuf_5s_3:
-    kotekan_buffer: vis
-  visbuf_5s_merge:
-    kotekan_buffer: vis
-  visbuf_10s_0:
-    kotekan_buffer: vis
-  visbuf_10s_1:
-    kotekan_buffer: vis
-  visbuf_10s_2:
-    kotekan_buffer: vis
-  visbuf_10s_3:
-    kotekan_buffer: vis
-
-vis_buffers:
-  metadata_pool: vis_pool
-  num_frames: buffer_depth
-  visbuf_10s_merge:
-    kotekan_buffer: vis
-  visbuf_eig_10s_merge:
-    kotekan_buffer: vis
-  # Buffers for gated
-  visbuf_psr0_5s_0:
-    kotekan_buffer: vis
-  visbuf_psr0_5s_1:
-    kotekan_buffer: vis
-  visbuf_psr0_5s_2:
-    kotekan_buffer: vis
-  visbuf_psr0_5s_3:
-    kotekan_buffer: vis
-  visbuf_psr0_5s_merge:
-    kotekan_buffer: vis
-  # Increase the buffer depth for the pre-send buffers
-  visbuf_5s_26m:
-    kotekan_buffer: vis
-    num_prod: 4096
-    num_frames: 10 * buffer_depth
-  visbuf_psr0_5s_26m:
-    kotekan_buffer: vis
-    num_prod: 4096
-    num_frames: 10 * buffer_depth
-
-gpu_rfi_output_buffers:
-  num_frames: buffer_depth * 50
-  frame_size: sizeof_float * num_local_freq * samples_per_data_set / sk_step
-  metadata_pool: main_pool
-  gpu_rfi_output_buffer_0:
-    kotekan_buffer: standard
-  gpu_rfi_output_buffer_1:
-    kotekan_buffer: standard
-  gpu_rfi_output_buffer_2:
-    kotekan_buffer: standard
-  gpu_rfi_output_buffer_3:
-    kotekan_buffer: standard
-
-gpu_rfi_valve_buffers:
-  num_frames: buffer_depth
-  frame_size: sizeof_float * num_local_freq * samples_per_data_set / sk_step
-  metadata_pool: main_pool
-  rfi_valve_buffer_0:
-    kotekan_buffer: standard
-  rfi_valve_buffer_1:
-    kotekan_buffer: standard
-  rfi_valve_buffer_2:
-    kotekan_buffer: standard
-  rfi_valve_buffer_3:
-    kotekan_buffer: standard
-
-gpu_rfi_mask_output_buffers:
-  num_frames: buffer_depth
-  frame_size: num_local_freq * samples_per_data_set / sk_step
-  metadata_pool: main_pool
-  gpu_rfi_mask_output_buffer_0:
-    kotekan_buffer: standard
-  gpu_rfi_mask_output_buffer_1:
-    kotekan_buffer: standard
-  gpu_rfi_mask_output_buffer_2:
-    kotekan_buffer: standard
-  gpu_rfi_mask_output_buffer_3:
-    kotekan_buffer: standard
-
-gpu_rfi_bad_input_buffers:
-  num_frames: buffer_depth
-  frame_size: sizeof_float * num_elements * num_local_freq
-  metadata_pool: main_pool
-  gpu_rfi_bad_input_buffer_0:
-    kotekan_buffer: standard
-  gpu_rfi_bad_input_buffer_1:
-    kotekan_buffer: standard
-  gpu_rfi_bad_input_buffer_2:
-    kotekan_buffer: standard
-  gpu_rfi_bad_input_buffer_3:
-    kotekan_buffer: standard
-
 # Bad inputs buffer
 bad_input_buffer:
   num_frames: buffer_depth
@@ -564,57 +338,11 @@ bad_input_buffer:
   bad_inputs_buffer:
     kotekan_buffer: standard
 
-rfi_var_output_buffers:
-  num_frames: buffer_depth * 50
-  frame_size: num_local_freq * samples_per_data_set / sk_step * sizeof_float
-  metadata_pool: main_pool
-  gpu_rfi_var_output_buffer_0:
-    kotekan_buffer: standard
-  gpu_rfi_var_output_buffer_1:
-    kotekan_buffer: standard
-  gpu_rfi_var_output_buffer_2:
-    kotekan_buffer: standard
-  gpu_rfi_var_output_buffer_3:
-    kotekan_buffer: standard
-
 lost_samples_buffer:
   kotekan_buffer: standard
   num_frames: 2 * buffer_depth
   frame_size: samples_per_data_set
   metadata_pool: main_pool
-
-rfi_compressed_lost_samples_buf:
-  kotekan_buffer: standard
-  num_frames: buffer_depth * 50
-  frame_size: sizeof_int * samples_per_data_set / sk_step
-  metadata_pool: main_pool
-
-rfi_compressed_lost_samples_buffers:
-  num_frames: buffer_depth * 2
-  frame_size: sizeof_int * samples_per_data_set / sk_step
-  metadata_pool: main_pool
-  rfi_compressed_lost_samples_buf_0:
-    kotekan_buffer: standard
-  rfi_compressed_lost_samples_buf_1:
-    kotekan_buffer: standard
-  rfi_compressed_lost_samples_buf_2:
-    kotekan_buffer: standard
-  rfi_compressed_lost_samples_buf_3:
-    kotekan_buffer: standard
-
-hfb_compressed_lost_samples_buffers:
-  num_frames: buffer_depth * 2
-  frame_size: sizeof_int * samples_per_data_set / (factor_upchan * downsample_time)
-  metadata_pool: main_pool
-  hfb_compressed_lost_samples_buf_0:
-    kotekan_buffer: standard
-  hfb_compressed_lost_samples_buf_1:
-    kotekan_buffer: standard
-  hfb_compressed_lost_samples_buf_2:
-    kotekan_buffer: standard
-  hfb_compressed_lost_samples_buf_3:
-    kotekan_buffer: standard
-
 
 ##########################
 #### Pipeline Stages #####
@@ -684,7 +412,7 @@ baseband_output_buffers:
     num_frames: 12
 
 baseband:
-  max_dump_samples: 546875 #1.4s
+  max_dump_samples: 54000 # reduce to 140 ms for fast testing #546875 #1.4s
   num_frames_buffer: baseband_buffer_depth - 10
   baseband0:
     kotekan_stage: basebandReadout
@@ -713,19 +441,12 @@ baseband_merge:
     - baseband_output_buffer_3
   out_buf: baseband_output_buffer_merged
 
-# Transmit baseband data to the baseband receiver
-baseband_send:
-  server_ip: 10.1.50.51 # outrigger-buffer.chime 
-  reconnect_time: 60
-  send_timeout: 600 # 10 minutes
-  log_level: warn
-  # Keep data in memory even if the receiver node is down
-  # Baseband readout handles back pressure management
-  drop_frames: false
-  baseband_send_0:
-    kotekan_stage: bufferSend
-    server_port: 11027
-    buf: baseband_output_buffer_merged
+write_baseband:
+  root_path: /home/calvin/baseband_raw # write out directly as a test
+  dump_timeout: 1200 # 20 Minutes
+  write_0:
+    kotekan_stage: BasebandWriter
+    in_buf: baseband_output_buffer_merged
 
 # Buffer bad input updates
 # 1) Reorder list
@@ -736,39 +457,6 @@ buffer_bad_input_update:
   updatable_config:
     bad_inputs: /updatable_config/bad_inputs
   out_buf: bad_inputs_buffer
-
-# Compress lost samples buffer for HFB
-hfb_compress_lost_samples:
-  kotekan_stage: compressLostSamples
-  compression_factor: factor_upchan * downsample_time
-  zero_all_in_group: true
-  in_buf: lost_samples_buffer
-  out_buf: hfb_compressed_lost_samples_buf_0
-
-hfb_copy_compress_lost_samples_buffers:
-  kotekan_stage: bufferCopy
-  in_buf: hfb_compressed_lost_samples_buf_0
-  out_bufs:
-    - hfb_compressed_lost_samples_buf_1
-    - hfb_compressed_lost_samples_buf_2
-    - hfb_compressed_lost_samples_buf_3
-
-# Compress lost samples buffer for RFI
-rfi_compress_lost_samples:
-  kotekan_stage: compressLostSamples
-  compression_factor: sk_step
-  zero_all_in_group: false
-  in_buf: lost_samples_buffer
-  out_buf: rfi_compressed_lost_samples_buf
-
-rfi_copy_compress_lost_samples_buffers:
-  kotekan_stage: bufferCopy
-  in_buf: rfi_compressed_lost_samples_buf
-  out_bufs:
-    - rfi_compressed_lost_samples_buf_0
-    - rfi_compressed_lost_samples_buf_1
-    - rfi_compressed_lost_samples_buf_2
-    - rfi_compressed_lost_samples_buf_3
 
 # GPU processing section
 gpu:
